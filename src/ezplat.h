@@ -8,6 +8,7 @@
 /**
  * Definitions
  */
+
 #define EZ_MAX_MOUSE_BUTTONS 5
 #define EZ_MAX_KEYS 256
 #define EZ_MAX_GAMEPADS 4
@@ -335,6 +336,7 @@ ez
 /**
  * API
  */
+
 void    *EzAllocateMemory(size_t size);
 void     EzFreeMemory(void *ptr);
 char    *EzReadEntireFile(char *pathname, size_t *size);
@@ -562,6 +564,7 @@ _Win32WindowProc(
     LPARAM LParam)
 {
     LRESULT Result = 0;
+
     ez *Ez = (ez *)GetWindowLongPtr(Window, GWLP_USERDATA);
     if(!Ez)
     {
@@ -595,11 +598,12 @@ _Win32WindowProc(
             Result = DefWindowProcA(Window, Message, WParam, LParam);
         } break;
     }
+
     return(Result);
 }
 
 void
-ez_pull_canvas(ez *Ez)
+_EzPullCanvas(ez *Ez)
 {
     ez_win32 *win32 = _EzGetWin32Context(Ez);
 
@@ -721,7 +725,7 @@ ez_process_gamepad_stick(
 }
 
 void
-ez_pull_time(ez *Ez)
+_EzPullTime(ez *Ez)
 {
     LARGE_INTEGER LargeInteger;
     QueryPerformanceCounter(&LargeInteger);
@@ -894,8 +898,8 @@ EzPull(ez *Ez)
             }
             Ez->Input.Gamepad = Ez->Input.Gamepads[0];
         }
-        ez_pull_canvas(Ez);
-        ez_pull_time(Ez);
+        _EzPullCanvas(Ez);
+        _EzPullTime(Ez);
     }
     else
     {
