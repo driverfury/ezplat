@@ -309,16 +309,18 @@ ez_input
     int               ConnectedGamepads;
 } ez_input;
 
+#include <inttypes.h>
+
 typedef struct
 ez_time
 {
-    unsigned long long ticks_per_second;
-    unsigned long long initial_ticks;
-    unsigned long long current_ticks;
-    unsigned long long ticks;
-    unsigned long long delta_ticks;
-    float              delta; // milliseconds
-    double             since_start; // milliseconds
+    uint64_t TicksPerSecond;
+    uint64_t InitialTicks;
+    uint64_t CurrentTicks;
+    uint64_t Ticks;
+    uint64_t DeltaTicks;
+    float    Delta; // milliseconds
+    double   SinceStart; // milliseconds
 } ez_time;
 
 typedef struct
@@ -398,7 +400,7 @@ Printf(char *format, ...)
 
 #include <inttypes.h>
 
-void *
+extern void *
 EzAllocateMemory(size_t size)
 {
     void *ptr = (void *)VirtualAlloc(
@@ -407,13 +409,13 @@ EzAllocateMemory(size_t size)
     return(ptr);
 }
 
-void
+extern void
 EzFreeMemory(void *ptr)
 {
     VirtualFree(ptr, 0, MEM_RELEASE|MEM_DECOMMIT);
 }
 
-char *
+extern char *
 EzReadEntireFile(char *pathname, size_t *size)
 {
     char *content = 0;
@@ -497,19 +499,11 @@ EzReadEntireFile(char *pathname, size_t *size)
 typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD, XINPUT_STATE*);
 typedef DWORD (WINAPI *XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION*);
 
-#define win32_xinput_process_digital_button(ButtonPtr, XInputState, XInputButton)\
-    ez_process_digital_button((ButtonPtr), (((XInputState).Gamepad.wButtons & (XInputButton)) ? 1 : 0));
-#define win32_xinput_process_analog_button(ButtonPtr, Value, MaxValue)\
-    ez_process_analog_button((ButtonPtr), (float)(Value) / (float)(MaxValue));
-#define win32_xinput_process_gamepad_stick(ButtonPtr, X, MaxX, Y, MaxY)\
-    ez_process_gamepad_stick((ButtonPtr), (float)(X) / (float)(MaxX), (float)(Y) / (float)(MaxY));
-
 typedef struct
 ez_win32
 {
     // NOTE: Windows
     HWND Window;
-    HDC DeviceContext;
 
     // NOTE: XInput
     XINPUTGETSTATE XInputGetState;
@@ -519,15 +513,20 @@ ez_win32
     BITMAPINFO BitmapInfo;
 } ez_win32;
 
-ez_win32 *
-_EzGetWin32Context(ez *Ez)
+static ez_win32 *
+EzGetWin32Context(ez *Ez)
 {
+    if(!Ez)
+    {
+        return(0);
+    }
+
     return((ez_win32 *)Ez->OSContext);
 }
 
 // TODO: Maybe this don't need to be a function
 inline static void
-win32_xinput_load(ez_win32 *win32)
+Win32LoadXInputLibrary(ez_win32 *Win32)
 {
     char *XInputLibs[] = {
         "xinput1_3.dll",
@@ -547,8 +546,8 @@ win32_xinput_load(ez_win32 *win32)
     }
     if(XInput)
     {
-        win32->XInputGetState = (XINPUTGETSTATE)GetProcAddress(XInput, "XInputGetState");
-        win32->XInputSetState = (XINPUTSETSTATE)GetProcAddress(XInput, "XInputSetState");
+        Win32->XInputGetState = (XINPUTGETSTATE)GetProcAddress(XInput, "XInputGetState");
+        Win32->XInputSetState = (XINPUTSETSTATE)GetProcAddress(XInput, "XInputSetState");
     }
     else
     {
@@ -556,8 +555,10 @@ win32_xinput_load(ez_win32 *win32)
     }
 }
 
+static void Win32DisplayBuffer(ez *Ez, HDC DeviceContext);
+
 static LRESULT CALLBACK
-_Win32WindowProc(
+Win32WindowProc(
     HWND   Window,
     UINT   Message,
     WPARAM WParam,
@@ -567,6 +568,12 @@ _Win32WindowProc(
 
     ez *Ez = (ez *)GetWindowLongPtr(Window, GWLP_USERDATA);
     if(!Ez)
+    {
+        Result = DefWindowProcA(Window, Message, WParam, LParam);
+    }
+
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(!Win32)
     {
         Result = DefWindowProcA(Window, Message, WParam, LParam);
     }
@@ -593,6 +600,14 @@ _Win32WindowProc(
             Ez->Running = 0;
         } break;
 
+        case WM_PAINT:
+        {
+            PAINTSTRUCT Paint;
+            HDC DeviceContext = BeginPaint(Win32->Window, &Paint);
+            Win32DisplayBuffer(Ez, DeviceContext);
+            EndPaint(Win32->Window, &Paint);
+        };
+
         default:
         {
             Result = DefWindowProcA(Window, Message, WParam, LParam);
@@ -602,17 +617,17 @@ _Win32WindowProc(
     return(Result);
 }
 
-void
-_EzPullCanvas(ez *Ez)
+static void
+EzPullCanvas(ez *Ez)
 {
-    ez_win32 *win32 = _EzGetWin32Context(Ez);
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
 
     RECT WindowRect;
-    GetWindowRect(win32->Window, &WindowRect);
+    GetWindowRect(Win32->Window, &WindowRect);
     Ez->Canvas.X = WindowRect.left;
     Ez->Canvas.Y = WindowRect.top;
     RECT ClientRect;
-    GetClientRect(win32->Window, &ClientRect);
+    GetClientRect(Win32->Window, &ClientRect);
     Ez->Canvas.Width  = ClientRect.right - ClientRect.left;
     Ez->Canvas.Height = ClientRect.bottom - ClientRect.top;
 
@@ -620,7 +635,7 @@ _EzPullCanvas(ez *Ez)
 }
 
 inline static void
-ez_reset_digital_button(ez_digital_button *DigitalButton)
+EzResetDigitalButton(ez_digital_button *DigitalButton)
 {
     DigitalButton->Pressed = 0;
     DigitalButton->Released = 0;
@@ -628,9 +643,9 @@ ez_reset_digital_button(ez_digital_button *DigitalButton)
 }
 
 inline static void
-ez_process_digital_button(
+EzProcessDigitalButton(
     ez_digital_button *DigitalButton,
-    long int IsDown)
+    int IsDown)
 {
     if(DigitalButton->Down != IsDown)
     {
@@ -656,7 +671,7 @@ ez_process_digital_button(
 }
 
 inline static void
-ez_process_analog_button(
+EzProcessAnalogButton(
     ez_analog_button *AnalogButton,
     float Value)
 {
@@ -674,7 +689,7 @@ ez_process_analog_button(
         Value = 0.0f;
     }
     AnalogButton->Value = Value;
-    long int WasDown = (AnalogButton->Down) ? 1 : 0;
+    int WasDown = (AnalogButton->Down) ? 1 : 0;
     AnalogButton->Down = (Value >= AnalogButton->Threshold) ? 1 : 0;
     if(AnalogButton->Down != WasDown)
     {
@@ -699,7 +714,7 @@ ez_process_analog_button(
 }
 
 inline static void
-ez_process_gamepad_stick(
+EzProcessGamepadStick(
     ez_gamepad_stick *Stick,
     float ValueX,
     float ValueY)
@@ -724,21 +739,28 @@ ez_process_gamepad_stick(
     Stick->Y = ValueY;
 }
 
-void
-_EzPullTime(ez *Ez)
+static void
+EzPullTime(ez *Ez)
 {
     LARGE_INTEGER LargeInteger;
     QueryPerformanceCounter(&LargeInteger);
-    unsigned long long current_ticks = LargeInteger.QuadPart;
+    uint64_t CurrentTicks = LargeInteger.QuadPart;
 
-    Ez->Time.delta_ticks = current_ticks - Ez->Time.initial_ticks - Ez->Time.ticks;
-    Ez->Time.ticks = current_ticks - Ez->Time.initial_ticks;
+    Ez->Time.DeltaTicks = CurrentTicks - Ez->Time.InitialTicks - Ez->Time.Ticks;
+    Ez->Time.Ticks = CurrentTicks - Ez->Time.InitialTicks;
 
-    Ez->Time.delta = (float)(1000 * Ez->Time.delta_ticks) / (float)Ez->Time.ticks_per_second;
-    Ez->Time.since_start  = (double)(1000 * Ez->Time.ticks) / (double)Ez->Time.ticks_per_second;
+    Ez->Time.Delta = (float)(1000 * Ez->Time.DeltaTicks) / (float)Ez->Time.TicksPerSecond;
+    Ez->Time.SinceStart  = (double)(1000 * Ez->Time.Ticks) / (double)Ez->Time.TicksPerSecond;
 }
 
-void
+#define Win32XInputProcessDigitalButton(ButtonPtr, XInputState, XInputButton)\
+    EzProcessDigitalButton((ButtonPtr), (((XInputState).Gamepad.wButtons & (XInputButton)) ? 1 : 0));
+#define Win32XInputProcessAnalogButton(ButtonPtr, Value, MaxValue)\
+    EzProcessAnalogButton((ButtonPtr), (float)(Value) / (float)(MaxValue));
+#define Win32XInputProcessGamepadStick(ButtonPtr, X, MaxX, Y, MaxY)\
+    EzProcessGamepadStick((ButtonPtr), (float)(X) / (float)(MaxX), (float)(Y) / (float)(MaxY));
+
+extern void
 EzPull(ez *Ez)
 {
     if(Ez->Initialized)
@@ -747,31 +769,31 @@ EzPull(ez *Ez)
             KeyIndex < EZ_MAX_KEYS;
             ++KeyIndex)
         {
-            ez_reset_digital_button(&Ez->Input.Keys[KeyIndex]);
+            EzResetDigitalButton(&Ez->Input.Keys[KeyIndex]);
         }
         for(int ButtonIndex = 0;
             ButtonIndex < EZ_MAX_MOUSE_BUTTONS;
             ++ButtonIndex)
         {
-            ez_reset_digital_button(&Ez->Input.Mouse.Buttons[ButtonIndex]);
+            EzResetDigitalButton(&Ez->Input.Mouse.Buttons[ButtonIndex]);
         }
         for(int GamepadIndex = 0;
             GamepadIndex < EZ_MAX_GAMEPADS;
             ++GamepadIndex)
         {
             ez_gamepad *Gamepad = &Ez->Input.Gamepads[GamepadIndex];
-            ez_reset_digital_button(&Gamepad->A);
-            ez_reset_digital_button(&Gamepad->B);
-            ez_reset_digital_button(&Gamepad->X);
-            ez_reset_digital_button(&Gamepad->Y);
-            ez_reset_digital_button(&Gamepad->Up);
-            ez_reset_digital_button(&Gamepad->Down);
-            ez_reset_digital_button(&Gamepad->Left);
-            ez_reset_digital_button(&Gamepad->Right);
-            ez_reset_digital_button(&Gamepad->LeftBumper);
-            ez_reset_digital_button(&Gamepad->RightBumper);
-            ez_reset_digital_button(&Gamepad->Start);
-            ez_reset_digital_button(&Gamepad->Back);
+            EzResetDigitalButton(&Gamepad->A);
+            EzResetDigitalButton(&Gamepad->B);
+            EzResetDigitalButton(&Gamepad->X);
+            EzResetDigitalButton(&Gamepad->Y);
+            EzResetDigitalButton(&Gamepad->Up);
+            EzResetDigitalButton(&Gamepad->Down);
+            EzResetDigitalButton(&Gamepad->Left);
+            EzResetDigitalButton(&Gamepad->Right);
+            EzResetDigitalButton(&Gamepad->LeftBumper);
+            EzResetDigitalButton(&Gamepad->RightBumper);
+            EzResetDigitalButton(&Gamepad->Start);
+            EzResetDigitalButton(&Gamepad->Back);
         }
 
         // NOTE: Keyboard pulling
@@ -793,11 +815,11 @@ EzPull(ez *Ez)
                     WPARAM KeyIndex = Message.wParam;
                     if(KeyIndex < EZ_MAX_KEYS)
                     {
-                        long int WasDown = ((Message.lParam & (1 << 30)) != 0) ? 1 : 0;
-                        long int IsDown  = ((Message.lParam & (1 << 31)) == 0) ? 1 : 0;
+                        int WasDown = ((Message.lParam & (1 << 30)) != 0) ? 1 : 0;
+                        int IsDown  = ((Message.lParam & (1 << 31)) == 0) ? 1 : 0;
                         if(IsDown != WasDown)
                         {
-                            ez_process_digital_button(
+                            EzProcessDigitalButton(
                                 &Ez->Input.Keys[KeyIndex],
                                 IsDown);
                         }
@@ -810,33 +832,33 @@ EzPull(ez *Ez)
                 } break;
             }
 
-            ez_win32 *win32 = _EzGetWin32Context(Ez);
+            ez_win32 *Win32 = EzGetWin32Context(Ez);
 
             // NOTE: Mouse pulling
             POINT MousePosition;
             GetCursorPos(&MousePosition);
-            ScreenToClient(win32->Window, &MousePosition);
+            ScreenToClient(Win32->Window, &MousePosition);
             Ez->Input.Mouse.X = MousePosition.x;
             Ez->Input.Mouse.Y = MousePosition.y;
             Ez->Input.Mouse.Z = 0; // TODO: Support mouse wheel
-            ez_process_digital_button(
+            EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_LEFT],
                 (GetKeyState(VK_LBUTTON) & (1 << 15)) > 0 ? 1 : 0);
-            ez_process_digital_button(
+            EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_MIDDLE],
                 (GetKeyState(VK_MBUTTON) & (1 << 15)) > 0 ? 1 : 0);
-            ez_process_digital_button(
+            EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_RIGHT],
                 (GetKeyState(VK_RBUTTON) & (1 << 15)) > 0 ? 1 : 0);
-            ez_process_digital_button(
+            EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_X1],
                 (GetKeyState(VK_XBUTTON1) & (1 << 15)) > 0 ? 1 : 0);
-            ez_process_digital_button(
+            EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_X2],
                 (GetKeyState(VK_XBUTTON2) & (1 << 15)) > 0 ? 1 : 0);
 
             // NOTE: Gamepad pulling
-            if(win32->XInputGetState)
+            if(Win32->XInputGetState)
             {
                 int ConnectedGamepads = 0;
                 XINPUT_STATE XInputState;
@@ -845,43 +867,43 @@ EzPull(ez *Ez)
                     ++Index)
                 {
                     ez_gamepad *Gamepad = &Ez->Input.Gamepads[EZ_MAX_GAMEPADS];
-                    DWORD XInputError = win32->XInputGetState(Index, &XInputState);
+                    DWORD XInputError = Win32->XInputGetState(Index, &XInputState);
                     if(XInputError == ERROR_SUCCESS)
                     {
                         Gamepad->Connected = 1;
                         ConnectedGamepads++;
-                        win32_xinput_process_digital_button(&Gamepad->A,
+                        Win32XInputProcessDigitalButton(&Gamepad->A,
                             XInputState, XINPUT_GAMEPAD_A);
-                        win32_xinput_process_digital_button(&Gamepad->B,
+                        Win32XInputProcessDigitalButton(&Gamepad->B,
                             XInputState, XINPUT_GAMEPAD_B);
-                        win32_xinput_process_digital_button(&Gamepad->X,
+                        Win32XInputProcessDigitalButton(&Gamepad->X,
                             XInputState, XINPUT_GAMEPAD_X);
-                        win32_xinput_process_digital_button(&Gamepad->Y,
+                        Win32XInputProcessDigitalButton(&Gamepad->Y,
                             XInputState, XINPUT_GAMEPAD_Y);
-                        win32_xinput_process_digital_button(&Gamepad->Up,
+                        Win32XInputProcessDigitalButton(&Gamepad->Up,
                             XInputState, XINPUT_GAMEPAD_DPAD_UP);
-                        win32_xinput_process_digital_button(&Gamepad->Down,
+                        Win32XInputProcessDigitalButton(&Gamepad->Down,
                             XInputState, XINPUT_GAMEPAD_DPAD_DOWN);
-                        win32_xinput_process_digital_button(&Gamepad->Left,
+                        Win32XInputProcessDigitalButton(&Gamepad->Left,
                             XInputState, XINPUT_GAMEPAD_DPAD_LEFT);
-                        win32_xinput_process_digital_button(&Gamepad->Right,
+                        Win32XInputProcessDigitalButton(&Gamepad->Right,
                             XInputState, XINPUT_GAMEPAD_DPAD_RIGHT);
-                        win32_xinput_process_digital_button(&Gamepad->LeftBumper,
+                        Win32XInputProcessDigitalButton(&Gamepad->LeftBumper,
                             XInputState, XINPUT_GAMEPAD_LEFT_SHOULDER);
-                        win32_xinput_process_digital_button(&Gamepad->RightBumper,
+                        Win32XInputProcessDigitalButton(&Gamepad->RightBumper,
                             XInputState, XINPUT_GAMEPAD_RIGHT_SHOULDER);
-                        win32_xinput_process_digital_button(&Gamepad->Start,
+                        Win32XInputProcessDigitalButton(&Gamepad->Start,
                             XInputState, XINPUT_GAMEPAD_START);
-                        win32_xinput_process_digital_button(&Gamepad->Back,
+                        Win32XInputProcessDigitalButton(&Gamepad->Back,
                             XInputState, XINPUT_GAMEPAD_BACK);
-                        win32_xinput_process_analog_button(&Gamepad->LeftTrigger,
+                        Win32XInputProcessAnalogButton(&Gamepad->LeftTrigger,
                             XInputState.Gamepad.bLeftTrigger, XINPUT_TRIGGER_MAX_VALUE);
-                        win32_xinput_process_analog_button(&Gamepad->RightTrigger,
+                        Win32XInputProcessAnalogButton(&Gamepad->RightTrigger,
                             XInputState.Gamepad.bRightTrigger, XINPUT_TRIGGER_MAX_VALUE);
-                        win32_xinput_process_gamepad_stick(&Gamepad->LeftStick,
+                        Win32XInputProcessGamepadStick(&Gamepad->LeftStick,
                             XInputState.Gamepad.sThumbLX, XINPUT_STICK_MAX_X,
                             XInputState.Gamepad.sThumbLY, XINPUT_STICK_MAX_Y);
-                        win32_xinput_process_gamepad_stick(&Gamepad->RightStick,
+                        Win32XInputProcessGamepadStick(&Gamepad->RightStick,
                             XInputState.Gamepad.sThumbRX, XINPUT_STICK_MAX_X,
                             XInputState.Gamepad.sThumbRY, XINPUT_STICK_MAX_Y);
                     }
@@ -898,8 +920,8 @@ EzPull(ez *Ez)
             }
             Ez->Input.Gamepad = Ez->Input.Gamepads[0];
         }
-        _EzPullCanvas(Ez);
-        _EzPullTime(Ez);
+        EzPullCanvas(Ez);
+        EzPullTime(Ez);
     }
     else
     {
@@ -907,10 +929,14 @@ EzPull(ez *Ez)
     }
 }
 
-void
-_Win32ResizeCanvas(ez *Ez, int Width, int Height)
+#undef Win32XInputProcessDigitalButton
+#undef Win32XInputProcessAnalogButton
+#undef Win32XInputProcessGamepadStick
+
+static void
+Win32ResizeCanvas(ez *Ez, int Width, int Height)
 {
-    ez_win32 *win32 = _EzGetWin32Context(Ez);
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
 
     if(Ez->Canvas.Pixels)
     {
@@ -920,12 +946,12 @@ _Win32ResizeCanvas(ez *Ez, int Width, int Height)
     Ez->Canvas.Width = Width;
     Ez->Canvas.Height = Height;
 
-    win32->BitmapInfo.bmiHeader.biSize = sizeof(win32->BitmapInfo.bmiHeader);
-    win32->BitmapInfo.bmiHeader.biWidth = Ez->Canvas.Width;
-    win32->BitmapInfo.bmiHeader.biHeight = -Ez->Canvas.Height;
-    win32->BitmapInfo.bmiHeader.biPlanes = 1;
-    win32->BitmapInfo.bmiHeader.biBitCount = 32;
-    win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
+    Win32->BitmapInfo.bmiHeader.biSize = sizeof(Win32->BitmapInfo.bmiHeader);
+    Win32->BitmapInfo.bmiHeader.biWidth = Ez->Canvas.Width;
+    Win32->BitmapInfo.bmiHeader.biHeight = -Ez->Canvas.Height;
+    Win32->BitmapInfo.bmiHeader.biPlanes = 1;
+    Win32->BitmapInfo.bmiHeader.biBitCount = 32;
+    Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
     int BytesPerPixel = 4;
     Ez->Canvas.Pixels = EzAllocateMemory((Ez->Canvas.Width*Ez->Canvas.Height)*BytesPerPixel);
@@ -940,27 +966,42 @@ _Win32ResizeCanvas(ez *Ez, int Width, int Height)
     }
 }
 
-void
-_Win32DisplayBuffer(ez *Ez)
+static void
+Win32DisplayBuffer(ez *Ez, HDC DeviceContext)
 {
-    ez_win32 *win32 = _EzGetWin32Context(Ez);
+    if(Ez && Ez->OSContext)
+    {
+        ez_win32 *Win32 = EzGetWin32Context(Ez);
 
-    StretchDIBits(
-        win32->DeviceContext,
-        0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
-        0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
-        Ez->Canvas.Pixels,
-        &win32->BitmapInfo,
-        DIB_RGB_COLORS, SRCCOPY);
+        int DeviceContextIsCreated = 0;
+        if(!DeviceContext)
+        {
+            DeviceContext = GetDC(Win32->Window);
+            DeviceContextIsCreated = 1;
+        }
+
+        StretchDIBits(
+            DeviceContext,
+            0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
+            0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
+            Ez->Canvas.Pixels,
+            &Win32->BitmapInfo,
+            DIB_RGB_COLORS, SRCCOPY);
+
+        if(DeviceContextIsCreated)
+        {
+            ReleaseDC(Win32->Window, DeviceContext);
+        }
+    }
 }
 
-void
+extern void
 EzPush(ez *Ez)
 {
-    _Win32DisplayBuffer(Ez);
+    Win32DisplayBuffer(Ez, 0);
 }
 
-void
+extern void
 EzUpdate(ez *Ez)
 {
     EzPush(Ez);
@@ -969,7 +1010,7 @@ EzUpdate(ez *Ez)
 
 // TODO: Should I make this extern? Maybe not because the user
 // simply use this library by including ez.h
-int
+extern int
 EzInitialize(ez *Ez)
 {
     Ez->Running = 0;
@@ -1038,7 +1079,7 @@ EzInitialize(ez *Ez)
 
     WNDCLASSA WindowClass = {0};
     WindowClass.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
-    WindowClass.lpfnWndProc = _Win32WindowProc;
+    WindowClass.lpfnWndProc = Win32WindowProc;
     // TODO: Do this
 #if 0
     WindowClass.cbClsExtra = ;
@@ -1052,26 +1093,27 @@ EzInitialize(ez *Ez)
     WindowClass.lpszClassName = WindowClassName;
     if(RegisterClassA(&WindowClass))
     {
-        ez_win32 *win32 = EzAllocateMemory(sizeof(ez_win32));
-        Ez->OSContext = (void *)win32;
+        ez_win32 *Win32 = EzAllocateMemory(sizeof(ez_win32));
+        Ez->OSContext = (void *)Win32;
 
-        win32->Window = CreateWindowExA(
-            WS_EX_OVERLAPPEDWINDOW,
-            WindowClassName, Ez->Canvas.Name,
+        Win32->Window = CreateWindowExA(
+            0,
+            WindowClass.lpszClassName,
+            Ez->Canvas.Name,
             WindowStyle,
             WindowX, WindowY,
             WindowWidth, WindowHeight,
             0, 0, 0, 0);
-        if(win32->Window)
+        if(Win32->Window)
         {
-            SetWindowLongPtr(win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
+            SetWindowLongPtr(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
 
             LARGE_INTEGER LargeInteger = {0};
             QueryPerformanceFrequency(&LargeInteger);
             if(LargeInteger.QuadPart > 0)
             {
                 // NOTE: Initialize XInput
-                win32_xinput_load(win32);
+                Win32LoadXInputLibrary(Win32);
                 for(int Index = 0;
                     Index < EZ_MAX_GAMEPADS;
                     ++Index)
@@ -1092,8 +1134,10 @@ EzInitialize(ez *Ez)
                 return(0);
             }
 
-            _Win32ResizeCanvas(Ez, Ez->Canvas.Width, Ez->Canvas.Height);
+            Win32ResizeCanvas(Ez, Ez->Canvas.Width, Ez->Canvas.Height);
             Ez->Running = 1;
+            Ez->Initialized = 1;
+            EzUpdate(Ez);
         }
         else
         {
