@@ -1,7 +1,3 @@
-/************************************
- * ez.h
- ************************************/
-
 #ifndef EZPLAT_H
 #define EZPLAT_H
 
@@ -13,13 +9,15 @@
 #define EZ_MAX_KEYS 256
 #define EZ_MAX_GAMEPADS 4
 
+#ifdef _WIN32
+
 /**
  * NOTE: I need the windows.h because I need to map ez keys to OS keys.
  * TODO: Declare the enumeration inside an preprocessor if, based on the OS.
  */
 #include <windows.h>
 
-enum
+typedef enum
 {
                                                     // 0x00-07 Undefined
 EZ_KEY_BACK = VK_BACK,	                            // 0x08
@@ -194,7 +192,13 @@ EZ_KEY_PA1 = VK_PA1,	                            // 0xFD
 EZ_KEY_OEM_CLEAR = VK_OEM_CLEAR,	                // 0xFE
 } ez_key;
 
-enum
+#else
+
+#error "OS not supported"
+
+#endif
+
+typedef enum
 {
     EZ_MOUSE_BTN_LEFT    = 0,
     EZ_MOUSE_BTN_MIDDLE  = 1,
@@ -203,7 +207,7 @@ enum
     EZ_MOUSE_BTN_X2      = 4,
 } ez_mouse_button;
 
-enum
+typedef enum
 {
     EZ_GAMEPAD_BTN_A = 0,
     EZ_GAMEPAD_BTN_B,
@@ -225,6 +229,11 @@ enum
     EZ_GAMEPAD_BUTTONS = EZ_GAMEPAD_BTN_BACK,
 } ez_gamepad_button;
 
+typedef enum
+{
+    EZ_PIXEL_FORMAT_ARGB = 0,
+} ez_pixel_format;
+
 typedef struct
 ez_canvas
 {
@@ -236,6 +245,7 @@ ez_canvas
     int Fullscreen;
     char *Name;
     void *Pixels;
+    ez_pixel_format PixelFormat;
 } ez_canvas;
 
 typedef struct
@@ -250,7 +260,6 @@ ez_digital_button
 typedef struct
 ez_analog_button
 {
-    // TODO:
     float Value;
     float Threshold;
     int Down;
@@ -339,22 +348,13 @@ ez
  * API
  */
 
-void    *EzAllocateMemory(size_t size);
-void     EzFreeMemory(void *ptr);
-char    *EzReadEntireFile(char *pathname, size_t *size);
-
-int      EzInitialize(ez *Ez);
-void     EzPush(ez *Ez);
-void     EzPull(ez *Ez);
-void     EzUpdate(ez *Ez);
+extern int      EzInitialize(ez *Ez);
+extern void     EzPush(ez *Ez);
+extern void     EzPull(ez *Ez);
 
 #ifdef EZPLAT_IMPLEMENTATION
 
-#if 0
-#define EZ_IMPLEMENTATION
-#define EZ_NO_CRT_LIB
-#include "ez.h"
-#endif
+#ifdef _WIN32
 
 /**
  * TODO:
@@ -400,7 +400,7 @@ Printf(char *format, ...)
 
 #include <inttypes.h>
 
-extern void *
+static void *
 EzAllocateMemory(size_t size)
 {
     void *ptr = (void *)VirtualAlloc(
@@ -409,13 +409,13 @@ EzAllocateMemory(size_t size)
     return(ptr);
 }
 
-extern void
+static void
 EzFreeMemory(void *ptr)
 {
     VirtualFree(ptr, 0, MEM_RELEASE|MEM_DECOMMIT);
 }
 
-extern char *
+static char *
 EzReadEntireFile(char *pathname, size_t *size)
 {
     char *content = 0;
@@ -502,7 +502,7 @@ typedef DWORD (WINAPI *XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION*);
 typedef struct
 ez_win32
 {
-    // NOTE: Windows
+    // NOTE: Window
     HWND Window;
 
     // NOTE: XInput
@@ -555,7 +555,48 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
     }
 }
 
-static void Win32DisplayBuffer(ez *Ez, HDC DeviceContext);
+typedef struct
+win32_window_rect
+{
+    int X;
+    int Y;
+    int Width;
+    int Height;
+} win32_window_rect;
+
+static win32_window_rect
+Win32GetWindowRect(HWND Window)
+{
+    win32_window_rect WindowRect = {0};
+
+    RECT TmpRect;
+    GetWindowRect(Window, &TmpRect);
+    WindowRect.X = TmpRect.left;
+    WindowRect.Y = TmpRect.top;
+    WindowRect.Width = TmpRect.right - TmpRect.left;
+    WindowRect.Height = TmpRect.bottom - TmpRect.top;
+
+    return(WindowRect);
+}
+
+static win32_window_rect
+Win32GetClientRect(HWND Window)
+{
+    win32_window_rect ClientRect = {0};
+
+    RECT TmpRect;
+    if(GetClientRect(Window, &TmpRect))
+    {
+        ClientRect.X = TmpRect.left;
+        ClientRect.Y = TmpRect.top;
+        ClientRect.Width = TmpRect.right - TmpRect.left;
+        ClientRect.Height = TmpRect.bottom - TmpRect.top;
+    }
+
+    return(ClientRect);
+}
+
+static void Win32DisplayBuffer(ez *Ez);
 
 static LRESULT CALLBACK
 Win32WindowProc(
@@ -580,6 +621,7 @@ Win32WindowProc(
 
     switch(Message)
     {
+
 #if 0
         case WM_ACTIVATE:
         {
@@ -600,12 +642,13 @@ Win32WindowProc(
             Ez->Running = 0;
         } break;
 
+        case WM_SIZE:
+        {
+        } break;
+
         case WM_PAINT:
         {
-            PAINTSTRUCT Paint;
-            HDC DeviceContext = BeginPaint(Win32->Window, &Paint);
-            Win32DisplayBuffer(Ez, DeviceContext);
-            EndPaint(Win32->Window, &Paint);
+            Win32DisplayBuffer(Ez);
         };
 
         default:
@@ -622,14 +665,19 @@ EzPullCanvas(ez *Ez)
 {
     ez_win32 *Win32 = EzGetWin32Context(Ez);
 
-    RECT WindowRect;
-    GetWindowRect(Win32->Window, &WindowRect);
-    Ez->Canvas.X = WindowRect.left;
-    Ez->Canvas.Y = WindowRect.top;
-    RECT ClientRect;
-    GetClientRect(Win32->Window, &ClientRect);
-    Ez->Canvas.Width  = ClientRect.right - ClientRect.left;
-    Ez->Canvas.Height = ClientRect.bottom - ClientRect.top;
+    if(Win32)
+    {
+        win32_window_rect WindowRect = Win32GetWindowRect(Win32->Window);
+        Ez->Canvas.X = WindowRect.X;
+        Ez->Canvas.Y = WindowRect.Y;
+
+#if 0
+        RECT ClientRect;
+        GetClientRect(Win32->Window, &ClientRect);
+        Ez->Canvas.Width  = ClientRect.right - ClientRect.left;
+        Ez->Canvas.Height = ClientRect.bottom - ClientRect.top;
+#endif
+    }
 
     // TODO: Fetch fullscreen state
 }
@@ -763,7 +811,7 @@ EzPullTime(ez *Ez)
 extern void
 EzPull(ez *Ez)
 {
-    if(Ez->Initialized)
+    if(Ez && Ez->Initialized)
     {
         for(int KeyIndex = 0;
             KeyIndex < EZ_MAX_KEYS;
@@ -934,62 +982,23 @@ EzPull(ez *Ez)
 #undef Win32XInputProcessGamepadStick
 
 static void
-Win32ResizeCanvas(ez *Ez, int Width, int Height)
+Win32DisplayBuffer(ez *Ez)
 {
     ez_win32 *Win32 = EzGetWin32Context(Ez);
-
-    if(Ez->Canvas.Pixels)
+    if(Ez && Win32)
     {
-        EzFreeMemory(Ez->Canvas.Pixels);
-    }
-
-    Ez->Canvas.Width = Width;
-    Ez->Canvas.Height = Height;
-
-    Win32->BitmapInfo.bmiHeader.biSize = sizeof(Win32->BitmapInfo.bmiHeader);
-    Win32->BitmapInfo.bmiHeader.biWidth = Ez->Canvas.Width;
-    Win32->BitmapInfo.bmiHeader.biHeight = -Ez->Canvas.Height;
-    Win32->BitmapInfo.bmiHeader.biPlanes = 1;
-    Win32->BitmapInfo.bmiHeader.biBitCount = 32;
-    Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
-
-    int BytesPerPixel = 4;
-    Ez->Canvas.Pixels = EzAllocateMemory((Ez->Canvas.Width*Ez->Canvas.Height)*BytesPerPixel);
-    Assert(Ez->Canvas.Pixels);
-
-    // Clear
-    for(int PixelIndex = 0;
-        PixelIndex < (Ez->Canvas.Width*Ez->Canvas.Height)*BytesPerPixel;
-        ++PixelIndex)
-    {
-        *((uint8_t *)Ez->Canvas.Pixels + PixelIndex) = 0;
-    }
-}
-
-static void
-Win32DisplayBuffer(ez *Ez, HDC DeviceContext)
-{
-    if(Ez && Ez->OSContext)
-    {
-        ez_win32 *Win32 = EzGetWin32Context(Ez);
-
-        int DeviceContextIsCreated = 0;
-        if(!DeviceContext)
+        if(Ez->Canvas.Pixels)
         {
-            DeviceContext = GetDC(Win32->Window);
-            DeviceContextIsCreated = 1;
-        }
+            win32_window_rect ClientRect = Win32GetClientRect(Win32->Window);
+            HDC DeviceContext = GetDC(Win32->Window);
 
-        StretchDIBits(
-            DeviceContext,
-            0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
-            0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
-            Ez->Canvas.Pixels,
-            &Win32->BitmapInfo,
-            DIB_RGB_COLORS, SRCCOPY);
+            StretchDIBits(
+                DeviceContext,
+                0, 0, ClientRect.Width, ClientRect.Width,
+                0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
+                Ez->Canvas.Pixels, &Win32->BitmapInfo,
+                DIB_RGB_COLORS, SRCCOPY);
 
-        if(DeviceContextIsCreated)
-        {
             ReleaseDC(Win32->Window, DeviceContext);
         }
     }
@@ -998,18 +1007,9 @@ Win32DisplayBuffer(ez *Ez, HDC DeviceContext)
 extern void
 EzPush(ez *Ez)
 {
-    Win32DisplayBuffer(Ez, 0);
+    Win32DisplayBuffer(Ez);
 }
 
-extern void
-EzUpdate(ez *Ez)
-{
-    EzPush(Ez);
-    EzPull(Ez);
-}
-
-// TODO: Should I make this extern? Maybe not because the user
-// simply use this library by including ez.h
 extern int
 EzInitialize(ez *Ez)
 {
@@ -1017,59 +1017,23 @@ EzInitialize(ez *Ez)
     Ez->Initialized = 0;
 
     char *WindowClassName = "ez_window_class";
-    DWORD WindowStyle = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-    int WindowX;
-    int WindowY;
-    int WindowWidth;
-    int WindowHeight;
+    DWORD WindowStyle = WS_OVERLAPPEDWINDOW;
 
     if(!Ez->Canvas.Name)
     {
         Ez->Canvas.Name = "ez";
     }
-    if(Ez->Canvas.X != 0)
+
+    if(Ez->Canvas.Width <= 0 || Ez->Canvas.Height <= 0)
     {
-        WindowX = Ez->Canvas.X;
-    }
-    else
-    {
-        WindowX = CW_USEDEFAULT;
-    }
-    if(Ez->Canvas.Y != 0)
-    {
-        WindowY = Ez->Canvas.Y;
-    }
-    else
-    {
-        WindowY = CW_USEDEFAULT;
-    }
-    if(Ez->Canvas.Width != 0)
-    {
-        WindowWidth = Ez->Canvas.Width;
-    }
-    else
-    {
-        WindowWidth  = CW_USEDEFAULT;
-    }
-    if(Ez->Canvas.Height != 0)
-    {
-        WindowHeight = Ez->Canvas.Height;
-    }
-    else
-    {
-        WindowHeight = CW_USEDEFAULT;
+        // TODO: Logging
+        return(0);
     }
 
-    if(WindowWidth != CW_USEDEFAULT && WindowHeight != CW_USEDEFAULT)
+    if(Ez->Canvas.PixelFormat != EZ_PIXEL_FORMAT_ARGB)
     {
-        RECT WindowRect;
-        WindowRect.left   = 0;
-        WindowRect.right  = WindowWidth;
-        WindowRect.top    = 0;
-        WindowRect.bottom = WindowHeight;
-        AdjustWindowRect(&WindowRect, WindowStyle, 0);
-        WindowWidth  = WindowRect.right - WindowRect.left;
-        WindowHeight = WindowRect.bottom - WindowRect.top;
+        // TODO: Logging
+        return(0);
     }
 
     // TODO: Fullscreen
@@ -1080,39 +1044,52 @@ EzInitialize(ez *Ez)
     WNDCLASSA WindowClass = {0};
     WindowClass.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
     WindowClass.lpfnWndProc = Win32WindowProc;
-    // TODO: Do this
-#if 0
-    WindowClass.cbClsExtra = ;
-    WindowClass.cbWndExtra = ;
-    WindowClass.hInstance = ;
-    WindowClass.hIcon = ;
-    WindowClass.hCursor = ;
-    WindowClass.hbrBackground = ;
-    WindowClass.lpszMenuName = ;
-#endif
+    WindowClass.cbClsExtra = 0;
+    WindowClass.cbWndExtra = 0;
+    WindowClass.hInstance = 0;
+    WindowClass.hIcon = LoadIcon(0, IDI_APPLICATION);
+    WindowClass.hCursor = LoadCursor(0, IDC_ARROW);
+    WindowClass.hbrBackground = 0;
+    WindowClass.lpszMenuName = 0;
     WindowClass.lpszClassName = WindowClassName;
     if(RegisterClassA(&WindowClass))
     {
         ez_win32 *Win32 = EzAllocateMemory(sizeof(ez_win32));
         Ez->OSContext = (void *)Win32;
 
+        RECT WindowRect = {0};
+        WindowRect.left   = 0;
+        WindowRect.top    = 0;
+        WindowRect.right  = Ez->Canvas.Width + WindowRect.left;
+        WindowRect.bottom = Ez->Canvas.Height + WindowRect.top;
+        if(!AdjustWindowRect(&WindowRect, WindowStyle, 0))
+        {
+            // TODO: Logging
+            return(1);
+        }
+        int WindowWidth  = WindowRect.right - WindowRect.left;
+        int WindowHeight = WindowRect.bottom - WindowRect.top;
+
         Win32->Window = CreateWindowExA(
             0,
             WindowClass.lpszClassName,
             Ez->Canvas.Name,
             WindowStyle,
-            WindowX, WindowY,
+            CW_USEDEFAULT, CW_USEDEFAULT,
             WindowWidth, WindowHeight,
             0, 0, 0, 0);
         if(Win32->Window)
         {
             SetWindowLongPtr(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
 
+            // NOTE: If we don't do this non-sense, the GetClientRect() function keeps returning the wrong values.
+            SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE);
+            SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
+
             LARGE_INTEGER LargeInteger = {0};
             QueryPerformanceFrequency(&LargeInteger);
             if(LargeInteger.QuadPart > 0)
             {
-                // NOTE: Initialize XInput
                 Win32LoadXInputLibrary(Win32);
                 for(int Index = 0;
                     Index < EZ_MAX_GAMEPADS;
@@ -1134,10 +1111,19 @@ EzInitialize(ez *Ez)
                 return(0);
             }
 
-            Win32ResizeCanvas(Ez, Ez->Canvas.Width, Ez->Canvas.Height);
+            Win32->BitmapInfo.bmiHeader.biSize = sizeof(Win32->BitmapInfo.bmiHeader);
+            Win32->BitmapInfo.bmiHeader.biWidth = Ez->Canvas.Width;
+            Win32->BitmapInfo.bmiHeader.biHeight = -Ez->Canvas.Height;
+            Win32->BitmapInfo.bmiHeader.biPlanes = 1;
+            Win32->BitmapInfo.bmiHeader.biBitCount = 32;
+            Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
+
             Ez->Running = 1;
             Ez->Initialized = 1;
-            EzUpdate(Ez);
+            ShowWindow(Win32->Window, SW_SHOW);
+
+            EzPull(Ez);
+            EzPush(Ez);
         }
         else
         {
@@ -1153,200 +1139,6 @@ EzInitialize(ez *Ez)
     return(1);
 }
 
-#if 0
-
-#include <inttypes.h>
-#include <stddef.h>
-
-// TODO: Are these really useful? Maybe when writing windows structs
-// to not include windows.h (same thing for xinput.h)
-typedef uint8_t  ezu8;
-typedef uint16_t ezu16;
-typedef uint32_t ezu32;
-typedef uint64_t ezu64;
-
-typedef int8_t   ezi8;
-typedef int16_t  ezi16;
-typedef int32_t  ezi32;
-typedef int64_t  ezi64;
-
-
-
-#pragma pack(push, 1)
-typedef struct
-ez_bitmap_header
-{
-    ezu16  FileType;
-    ezu32  FileSize;
-    ezu16  Reserved1;
-    ezu16  Reserved2;
-    ezu32  BitmapOffset;
-    ezu32  Size;
-    ezi32  Width;
-    ezi32  Height;
-    ezu16  Planes;
-    ezu16  BitsPerPixel;
-    ezu32  Compression;
-    ezu32  SizeOfBitmap;
-    ezi32  HorzResolution;
-    ezi32  VertResolution;
-    ezu32  ColorsUsed;
-    ezu32  ColorsImportant;
-
-    ezu32  RedMask;
-    ezu32  GreenMask;
-    ezu32  BlueMask;
-} ez_bitmap_header;
-#pragma pack(pop)
-
-typedef struct
-ez_bitmap
-{
-    ezi32  Width;
-    ezi32  Height;
-    ezu32 *Pixels;
-} ez_bitmap;
-
-typedef struct
-ez_bit_scan_result
-{
-    ezi32 Found;
-    ezu32 Index;
-} ez_bit_scan_result;
-
-inline ez_bit_scan_result
-ez_find_least_significant_set_bit(ezu32 Value)
-{
-    ez_bit_scan_result Result = {0};
-
-    for(ezu32 Test = 0;
-        Test < 32;
-        ++Test)
-    {
-        if(Value & (1 << Test))
-        {
-            Result.Index = Test;
-            Result.Found = 1;
-            break;
-        }
-    }
-
-    return(Result);
-}
-
-inline ezu32
-ez_rotate_left(ezu32 Value, ezi32 Amount)
-{
-    Amount &= 31;
-    ezu32 Result = ((Value << Amount)  | (Value >> (32 - Amount)));
-
-    return(Result);
-}
-
-inline ezu32
-ez_rotate_right(ezu32 Value, ezi32 Amount)
-{
-    Amount &= 31;
-    ezu32 Result = ((Value >> Amount)  | (Value << (32 - Amount)));
-
-    return(Result);
-}
-
-ez_bitmap
-ez_load_bmp(char *FileName)
-{
-    ez_bitmap Result = {0};
-
-    size_t FileSize;
-    void *FileContents = 0;
-
-    FileContents = EzReadEntireFile(FileName, &FileSize);
-    ez_assert(FileSize > 0 && FileContents);
-
-    ez_bitmap_header *Header = (ez_bitmap_header *)FileContents;
-    ezu32 *Pixels = (ezu32 *)((ezu8 *)FileContents + Header->BitmapOffset);
-
-    Result.Width = Header->Width;
-    Result.Height = Header->Height;
-    Result.Pixels = Pixels;
-
-    ez_assert(Header->Compression == 0);
-
-#if 0
-    ez_assert(Header->Compression == 3);
-
-    ezu32 RedMask   = Header->RedMask;
-    ezu32 GreenMask = Header->GreenMask;
-    ezu32 BlueMask  = Header->BlueMask;
-    ezu32 AlphaMask = ~(RedMask | GreenMask | BlueMask);
-
-    ez_bit_scan_result RedScan   = ez_find_least_significant_set_bit(RedMask);
-    ez_bit_scan_result GreenScan = ez_find_least_significant_set_bit(GreenMask);
-    ez_bit_scan_result BlueScan  = ez_find_least_significant_set_bit(BlueMask);
-    ez_bit_scan_result AlphaScan = ez_find_least_significant_set_bit(AlphaMask);
-
-    ez_assert(RedScan.Found);
-    ez_assert(BlueScan.Found);
-    ez_assert(GreenScan.Found);
-    ez_assert(AlphaScan.Found);
-
-    ezi32 RedShift   = 16 - (ezi32)RedScan.Index;
-    ezi32 GreenShift = 8 - (ezi32)GreenScan.Index;
-    ezi32 BlueShift  = 0 - (ezi32)BlueScan.Index;
-    ezi32 AlphaShift = 24 - (ezi32)AlphaScan.Index;
-
-    ezu32 *SourceDest = Pixels;
-    for(ezi32 Y = 0;
-        Y < Header->Height;
-        ++Y)
-    {
-        for(ezi32 X = 0;
-            X < Header->Width;
-            ++X)
-        {
-            ezu32 C = *SourceDest;
-
-            *SourceDest++ = (ez_rotate_left(C & RedMask, RedShift) |
-                             ez_rotate_left(C & GreenMask, GreenShift) |
-                             ez_rotate_left(C & BlueMask, BlueShift) |
-                             ez_rotate_left(C & AlphaMask, AlphaShift));
-        }
-    }
-#endif
-
-    return(Result);
-}
-
-void
-ez_draw_bitmap(ez_bitmap Bitmap)
-{
-    GLuint Texture;
-    glGenTextures(1, &Texture);
-    glBindTexture(GL_TEXTURE_2D, Texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, 8, 8, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, Bitmap.Pixels);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    //match projection to window resolution (could be in reshape callback)
-    glMatrixMode(GL_PROJECTION);
-    glOrtho(0, 800, 0, 600, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
-
-    //clear and draw quad with texture (could be in display callback)
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindTexture(GL_TEXTURE_2D, Texture);
-    glEnable(GL_TEXTURE_2D);
-    glBegin(GL_QUADS);
-    glTexCoord2i(0, 0); glVertex2i(100, 100);
-    glTexCoord2i(0, 1); glVertex2i(100, 500);
-    glTexCoord2i(1, 1); glVertex2i(500, 500);
-    glTexCoord2i(1, 0); glVertex2i(500, 100);
-    glEnd();
-    glDisable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glFlush(); //don't need this with GLUT_DOUBLE and glutSwapBuffers
-}
 #endif
 
 #endif
