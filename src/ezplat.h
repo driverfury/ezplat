@@ -332,6 +332,14 @@ ez_time
     double   SinceStart; // milliseconds
 } ez_time;
 
+#define EZ_INTERNALS_SIZE  100
+
+#ifdef _WIN32
+#define EZ_OS_CONTEXT_SIZE 100
+#else
+#error "OS not supported"
+#endif
+
 typedef struct
 ez
 {
@@ -341,7 +349,8 @@ ez
     ez_input  Input;
     ez_time   Time;
 
-    void *OSContext;
+    unsigned char Internals[EZ_INTERNALS_SIZE];
+    unsigned char OSContext[EZ_OS_CONTEXT_SIZE];
 } ez;
 
 /**
@@ -355,6 +364,23 @@ extern void     EzPull(ez *Ez);
 #ifdef EZPLAT_IMPLEMENTATION
 
 #ifdef _WIN32
+
+typedef struct
+ez_internals
+{
+    int PrevFullscreen;
+} ez_internals;
+
+static ez_internals *
+EzGetInternals(ez *Ez)
+{
+    if(!Ez)
+    {
+        return(0);
+    }
+
+    return((ez_internals *)Ez->Internals);
+}
 
 /**
  * TODO:
@@ -370,7 +396,6 @@ extern void     EzPull(ez *Ez);
 // version of the structures defined in winbase.h?)
 #include <windows.h>
 #include <xinput.h>
-#include <gl/gl.h>
 
 /*
  * Debug
@@ -393,29 +418,6 @@ Printf(char *format, ...)
 #endif
 
 /*
- * Utils
- */
-
-#define Assert(Condition)
-
-#include <inttypes.h>
-
-static void *
-EzAllocateMemory(size_t size)
-{
-    void *ptr = (void *)VirtualAlloc(
-        0, size,
-        MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
-    return(ptr);
-}
-
-static void
-EzFreeMemory(void *ptr)
-{
-    VirtualFree(ptr, 0, MEM_RELEASE|MEM_DECOMMIT);
-}
-
-/*
  * Native functions
  */
 #define XINPUT_TRIGGER_MAX_VALUE  255
@@ -432,6 +434,7 @@ ez_win32
 {
     // NOTE: Window
     HWND Window;
+    WINDOWPLACEMENT WindowPlacement;
 
     // NOTE: XInput
     XINPUTGETSTATE XInputGetState;
@@ -440,6 +443,13 @@ ez_win32
     // NOTE: Gfx
     BITMAPINFO BitmapInfo;
 } ez_win32;
+
+#if 0
+// TODO: Do this in a static way
+#if sizeof(ez_win32) < EZ_OS_CONTEXT_SIZE
+#error "There's not enough space for OS Context"
+#endif
+#endif
 
 static ez_win32 *
 EzGetWin32Context(ez *Ez)
@@ -598,13 +608,6 @@ EzPullCanvas(ez *Ez)
         win32_window_rect WindowRect = Win32GetWindowRect(Win32->Window);
         Ez->Canvas.X = WindowRect.X;
         Ez->Canvas.Y = WindowRect.Y;
-
-#if 0
-        RECT ClientRect;
-        GetClientRect(Win32->Window, &ClientRect);
-        Ez->Canvas.Width  = ClientRect.right - ClientRect.left;
-        Ez->Canvas.Height = ClientRect.bottom - ClientRect.top;
-#endif
     }
 
     // TODO: Fetch fullscreen state
@@ -932,10 +935,67 @@ Win32DisplayBuffer(ez *Ez)
     }
 }
 
+#define EZ_WIN32_NORMAL_WINDOW_STYLE (WS_OVERLAPPEDWINDOW)
+
 extern void
 EzPush(ez *Ez)
 {
-    Win32DisplayBuffer(Ez);
+    ez_internals *Internals = EzGetInternals(Ez);
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(Ez && Internals && Win32)
+    {
+        // Toggle fullscreen
+        if(Internals->PrevFullscreen == 0 && Ez->Canvas.Fullscreen != 0)
+        {
+            DWORD Style = GetWindowLong(Win32->Window, GWL_STYLE);
+            Win32->WindowPlacement.length = sizeof(Win32->WindowPlacement);
+            MONITORINFO MonitorInfo = {0};
+            MonitorInfo.cbSize = sizeof(MonitorInfo);
+            if(!GetWindowPlacement(Win32->Window, &Win32->WindowPlacement))
+            {
+                DWORD Err = GetLastError();
+                Err = Err - 1 + 1;
+            }
+
+            HMONITOR Monitor = MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY);
+            if(!Monitor)
+            {
+                DWORD Err = GetLastError();
+                Err = Err - 1 + 1;
+            }
+
+            if(!GetMonitorInfo(Monitor, &MonitorInfo))
+            {
+                DWORD Err = GetLastError();
+                Err = Err - 1 + 1;
+            }
+
+            if( GetWindowPlacement(Win32->Window, &Win32->WindowPlacement) &&
+                GetMonitorInfoA(MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY), &MonitorInfo))
+            {
+                SetWindowLong(
+                    Win32->Window, GWL_STYLE,
+                    Style & ~EZ_WIN32_NORMAL_WINDOW_STYLE);
+                SetWindowPos(
+                    Win32->Window, HWND_TOP,
+                    MonitorInfo.rcMonitor.left, MonitorInfo.rcMonitor.top,
+                    MonitorInfo.rcMonitor.right - MonitorInfo.rcMonitor.left,
+                    MonitorInfo.rcMonitor.bottom - MonitorInfo.rcMonitor.top,
+                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            }
+        }
+        else if(Internals->PrevFullscreen != 0 && Ez->Canvas.Fullscreen == 0)
+        {
+            DWORD Style = GetWindowLong(Win32->Window, GWL_STYLE);
+            SetWindowLong(Win32->Window, GWL_STYLE, Style | EZ_WIN32_NORMAL_WINDOW_STYLE);
+            SetWindowPlacement(Win32->Window, &Win32->WindowPlacement);
+            SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
+        }
+        Internals->PrevFullscreen = Ez->Canvas.Fullscreen;
+
+        // Display canvas buffer
+        Win32DisplayBuffer(Ez);
+    }
 }
 
 extern int
@@ -945,7 +1005,7 @@ EzInitialize(ez *Ez)
     Ez->Initialized = 0;
 
     char *WindowClassName = "ez_window_class";
-    DWORD WindowStyle = WS_OVERLAPPEDWINDOW;
+    DWORD WindowStyle = EZ_WIN32_NORMAL_WINDOW_STYLE;
 
     if(!Ez->Canvas.Name)
     {
@@ -964,11 +1024,6 @@ EzInitialize(ez *Ez)
         return(0);
     }
 
-    // TODO: Fullscreen
-    if(Ez->Canvas.Fullscreen)
-    {
-    }
-
     WNDCLASSA WindowClass = {0};
     WindowClass.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
     WindowClass.lpfnWndProc = Win32WindowProc;
@@ -982,8 +1037,7 @@ EzInitialize(ez *Ez)
     WindowClass.lpszClassName = WindowClassName;
     if(RegisterClassA(&WindowClass))
     {
-        ez_win32 *Win32 = EzAllocateMemory(sizeof(ez_win32));
-        Ez->OSContext = (void *)Win32;
+        ez_win32 *Win32 = (ez_win32 *)Ez->OSContext;
 
         RECT WindowRect = {0};
         WindowRect.left   = 0;
@@ -1046,6 +1100,12 @@ EzInitialize(ez *Ez)
             Win32->BitmapInfo.bmiHeader.biBitCount = 32;
             Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
+            ez_internals *Internals = EzGetInternals(Ez);
+            if(Internals)
+            {
+                Internals->PrevFullscreen = 0;
+            }
+
             Ez->Running = 1;
             Ez->Initialized = 1;
             ShowWindow(Win32->Window, SW_SHOW);
@@ -1066,6 +1126,14 @@ EzInitialize(ez *Ez)
     }
     return(1);
 }
+
+#undef EZ_WIN32_NORMAL_WINDOW_STYLE
+
+#undef XINPUT_TRIGGER_MAX_VALUE
+#undef XINPUT_STICK_MIN_X
+#undef XINPUT_STICK_MAX_X
+#undef XINPUT_STICK_MIN_Y
+#undef XINPUT_STICK_MAX_Y
 
 #endif
 
