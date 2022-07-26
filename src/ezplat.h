@@ -231,7 +231,7 @@ typedef enum
     EZ_GAMEPAD_BTN_START,
     EZ_GAMEPAD_BTN_BACK,
 
-    EZ_GAMEPAD_BUTTONS = EZ_GAMEPAD_BTN_BACK,
+    EZ_GAMEPAD_BUTTONS,
 } ez_gamepad_button;
 
 typedef enum
@@ -340,7 +340,7 @@ ez_time
 #define EZ_INTERNALS_SIZE  100
 
 #ifdef _WIN32
-#define EZ_OS_CONTEXT_SIZE 100
+#define EZ_OS_CONTEXT_SIZE 300
 #else
 #error "OS not supported"
 #endif
@@ -1146,6 +1146,12 @@ static int WindowClassIsRegistered;
 extern int
 EzInitialize(ez *Ez)
 {
+    if(sizeof(ez_win32) > EZ_OS_CONTEXT_SIZE)
+    {
+        // TODO: Log
+        return(0);
+    }
+
     Ez->Running = 0;
     Ez->Initialized = 0;
 
