@@ -2,6 +2,11 @@
 #define EZPLAT_H
 
 /**
+ * TODO:
+ * - Remove user32.lib and gdi32.lib dependencies
+ */
+
+/**
  * Definitions
  */
 
@@ -13,10 +18,10 @@
 
 /**
  * NOTE: I need the windows.h because I need to map ez keys to OS keys.
- * TODO: Declare the enumeration inside an preprocessor if, based on the OS.
  */
 #include <windows.h>
 
+// TODO: Only define a stripped down version of keys?
 typedef enum
 {
                                                     // 0x00-07 Undefined
@@ -417,12 +422,80 @@ Printf(char *format, ...)
 #define XINPUT_STICK_MIN_Y       -32768
 #define XINPUT_STICK_MAX_Y        32767
 
+
+// USER32.DLL
+typedef BOOL (*TRANSLATE_MESSAGE)(const MSG *);
+typedef BOOL (*DISPATCH_MESSAGE_A)(const MSG *);
+typedef BOOL (*PEEK_MESSAGE_A)(LPMSG, HWND, UINT, UINT, UINT);
+typedef LRESULT (*DEF_WINDOW_PROC_A)(HWND, UINT, WPARAM, LPARAM);
+typedef ATOM (*REGISTER_CLASS_A)(const WNDCLASSA *);
+typedef HWND (*CREATE_WINDOW_EX_A)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+typedef BOOL (*DESTROY_WINDOW)(HWND);
+typedef BOOL (*SHOW_WINDOW)(HWND, int);
+typedef BOOL (*SET_WINDOW_POS)(HWND, HWND, int, int, int, int, UINT);
+typedef BOOL (*GET_WINDOW_PLACEMENT)(HWND, WINDOWPLACEMENT*);
+typedef BOOL (*SET_WINDOW_PLACEMENT)(HWND, const WINDOWPLACEMENT*);
+typedef SHORT (*GET_KEY_STATE)(int);
+typedef HDC (*GET_DC)(HWND);
+typedef int (*RELEASE_DC)(HWND, HDC);
+typedef BOOL (*GET_CLIENT_RECT)(HWND, LPRECT);
+typedef BOOL (*GET_WINDOW_RECT)(HWND, LPRECT);
+typedef BOOL (*ADJUST_WINDOW_RECT)(LPRECT, DWORD, BOOL);
+typedef BOOL (*GET_CURSOR_POS)(LPPOINT);
+typedef BOOL (*SCREEN_TO_CLIENT)(HWND, LPPOINT);
+typedef LONG (*GET_WINDOW_LONG_A)(HWND, int);
+typedef BOOL (*SET_WINDOW_LONG_A)(HWND, int, LONG);
+typedef LONG_PTR (*GET_WINDOW_LONG_PTR_A)(HWND, int);
+typedef LONG_PTR (*SET_WINDOW_LONG_PTR_A)(HWND, int, LONG_PTR);
+
+typedef HCURSOR (*LOAD_CURSOR_A)(HINSTANCE, LPCSTR);
+typedef HICON (*LOAD_ICON_A)(HINSTANCE, LPCSTR);
+typedef HMONITOR (*MONITOR_FROM_WINDOW)(HWND, DWORD);
+typedef BOOL (*GET_MONITOR_INFO_A)(HMONITOR, LPMONITORINFO);
+
+// GDI32.DLL
+typedef int (*STRETCH_DIBITS)(HDC, int, int, int, int, int, int, int, int, const VOID*, const BITMAPINFO*, UINT, DWORD);
+
+// Xinput
 typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD, XINPUT_STATE*);
 typedef DWORD (WINAPI *XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION*);
+
+DEF_WINDOW_PROC_A Win32DefWindowProcA;
+GET_CLIENT_RECT Win32GetClientRect;
+GET_WINDOW_RECT Win32GetWindowRect;
+GET_WINDOW_LONG_PTR_A Win32GetWindowLongPtrA;
+SET_WINDOW_LONG_PTR_A Win32SetWindowLongPtrA;
 
 typedef struct
 ez_win32
 {
+    // NOTE: User32.dll functions
+    TRANSLATE_MESSAGE TranslateMessage;
+    DISPATCH_MESSAGE_A DispatchMessageA;
+    PEEK_MESSAGE_A PeekMessageA;
+    REGISTER_CLASS_A RegisterClassA;
+    CREATE_WINDOW_EX_A CreateWindowExA;
+    DESTROY_WINDOW DestroyWindow;
+    SHOW_WINDOW ShowWindow;
+    SET_WINDOW_POS SetWindowPos;
+    GET_WINDOW_PLACEMENT GetWindowPlacement;
+    SET_WINDOW_PLACEMENT SetWindowPlacement;
+    GET_KEY_STATE GetKeyState;
+    GET_DC GetDC;
+    RELEASE_DC ReleaseDC;
+    ADJUST_WINDOW_RECT AdjustWindowRect;
+    GET_CURSOR_POS GetCursorPos;
+    SCREEN_TO_CLIENT ScreenToClient;
+    GET_WINDOW_LONG_A GetWindowLongA;
+    SET_WINDOW_LONG_A SetWindowLongA;
+    LOAD_CURSOR_A LoadCursorA;
+    LOAD_ICON_A LoadIconA;
+    MONITOR_FROM_WINDOW MonitorFromWindow;
+    GET_MONITOR_INFO_A GetMonitorInfoA;
+    
+    // NOTE: Gdi32.dll functions
+    STRETCH_DIBITS StretchDIBits;
+
     // NOTE: Window
     HWND Window;
     WINDOWPLACEMENT WindowPlacement;
@@ -452,6 +525,76 @@ EzGetWin32Context(ez *Ez)
 
     return((ez_win32 *)Ez->OSContext);
 }
+
+#define WIN32_LOAD_PROC_ADDR(HMod, Type, FuncName)\
+    Win32->##FuncName = (Type)GetProcAddress(HMod, #FuncName);\
+    if(!Win32->##FuncName) return(0);
+
+inline static int
+Win32LoadUser32Dll(ez_win32 *Win32)
+{
+    HMODULE User32Dll = LoadLibraryA("user32.dll");
+    if(!User32Dll)
+    {
+        User32Dll = LoadLibraryA("USER32.DLL");
+    }
+
+    if(!User32Dll)
+    {
+        return(0);
+    }
+
+    Win32DefWindowProcA = (DEF_WINDOW_PROC_A)GetProcAddress(User32Dll, "DefWindowProcA");
+    if(!Win32DefWindowProcA) return(0);
+    Win32GetClientRect = (GET_CLIENT_RECT)GetProcAddress(User32Dll, "GetClientRect");
+    if(!Win32GetClientRect) return(0);
+    Win32GetWindowRect = (GET_WINDOW_RECT)GetProcAddress(User32Dll, "GetWindowRect");
+    if(!Win32GetWindowRect) return(0);
+    Win32GetWindowLongPtrA = (GET_WINDOW_LONG_PTR_A)GetProcAddress(User32Dll, "GetWindowLongPtrA");
+    if(!Win32GetWindowLongPtrA) return(0);
+    Win32SetWindowLongPtrA = (SET_WINDOW_LONG_PTR_A)GetProcAddress(User32Dll, "SetWindowLongPtrA");
+    if(!Win32SetWindowLongPtrA) return(0);
+
+    WIN32_LOAD_PROC_ADDR(User32Dll, TRANSLATE_MESSAGE, TranslateMessage);
+    WIN32_LOAD_PROC_ADDR(User32Dll, DISPATCH_MESSAGE_A, DispatchMessageA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, PEEK_MESSAGE_A, PeekMessageA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, REGISTER_CLASS_A, RegisterClassA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, CREATE_WINDOW_EX_A, CreateWindowExA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, DESTROY_WINDOW, DestroyWindow);
+    WIN32_LOAD_PROC_ADDR(User32Dll, SHOW_WINDOW, ShowWindow);
+    WIN32_LOAD_PROC_ADDR(User32Dll, SET_WINDOW_POS, SetWindowPos);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_WINDOW_PLACEMENT, GetWindowPlacement);
+    WIN32_LOAD_PROC_ADDR(User32Dll, SET_WINDOW_PLACEMENT, SetWindowPlacement);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_KEY_STATE, GetKeyState);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_DC, GetDC);
+    WIN32_LOAD_PROC_ADDR(User32Dll, RELEASE_DC, ReleaseDC);
+    WIN32_LOAD_PROC_ADDR(User32Dll, ADJUST_WINDOW_RECT, AdjustWindowRect);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_CURSOR_POS, GetCursorPos);
+    WIN32_LOAD_PROC_ADDR(User32Dll, SCREEN_TO_CLIENT, ScreenToClient);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_WINDOW_LONG_A, GetWindowLongA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, SET_WINDOW_LONG_A, SetWindowLongA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, LOAD_CURSOR_A, LoadCursorA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, LOAD_ICON_A, LoadIconA);
+    WIN32_LOAD_PROC_ADDR(User32Dll, MONITOR_FROM_WINDOW, MonitorFromWindow);
+    WIN32_LOAD_PROC_ADDR(User32Dll, GET_MONITOR_INFO_A, GetMonitorInfoA);
+
+    HMODULE Gdi32Dll = LoadLibraryA("gdi32.dll");
+    if(!Gdi32Dll)
+    {
+        Gdi32Dll = LoadLibraryA("GDI32.DLL");
+    }
+
+    if(!Gdi32Dll)
+    {
+        return(0);
+    }
+
+    WIN32_LOAD_PROC_ADDR(Gdi32Dll, STRETCH_DIBITS, StretchDIBits);
+
+    return(1);
+}
+
+#undef WIN32_LOAD_PROC_ADDR
 
 // TODO: Maybe this don't need to be a function
 inline static void
@@ -485,21 +628,21 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
 }
 
 typedef struct
-win32_window_rect
+win32_window_size
 {
     int X;
     int Y;
     int Width;
     int Height;
-} win32_window_rect;
+} win32_window_size;
 
-static win32_window_rect
-Win32GetWindowRect(HWND Window)
+static win32_window_size
+Win32GetWindowSize(HWND Window)
 {
-    win32_window_rect WindowRect = {0};
+    win32_window_size WindowRect = {0};
 
     RECT TmpRect;
-    GetWindowRect(Window, &TmpRect);
+    Win32GetWindowRect(Window, &TmpRect);
     WindowRect.X = TmpRect.left;
     WindowRect.Y = TmpRect.top;
     WindowRect.Width = TmpRect.right - TmpRect.left;
@@ -508,13 +651,13 @@ Win32GetWindowRect(HWND Window)
     return(WindowRect);
 }
 
-static win32_window_rect
-Win32GetClientRect(HWND Window)
+static win32_window_size
+Win32GetClientSize(HWND Window)
 {
-    win32_window_rect ClientRect = {0};
+    win32_window_size ClientRect = {0};
 
     RECT TmpRect;
-    if(GetClientRect(Window, &TmpRect))
+    if(Win32GetClientRect(Window, &TmpRect))
     {
         ClientRect.X = TmpRect.left;
         ClientRect.Y = TmpRect.top;
@@ -536,16 +679,16 @@ Win32WindowProc(
 {
     LRESULT Result = 0;
 
-    ez *Ez = (ez *)GetWindowLongPtr(Window, GWLP_USERDATA);
+    ez *Ez = (ez *)Win32GetWindowLongPtrA(Window, GWLP_USERDATA);
     if(!Ez)
     {
-        return(DefWindowProcA(Window, Message, WParam, LParam));
+        return(Win32DefWindowProcA(Window, Message, WParam, LParam));
     }
 
     ez_win32 *Win32 = EzGetWin32Context(Ez);
     if(!Win32)
     {
-        return(DefWindowProcA(Window, Message, WParam, LParam));
+        return(Win32DefWindowProcA(Window, Message, WParam, LParam));
     }
 
     switch(Message)
@@ -582,7 +725,7 @@ Win32WindowProc(
 
         default:
         {
-            Result = DefWindowProcA(Window, Message, WParam, LParam);
+            Result = Win32DefWindowProcA(Window, Message, WParam, LParam);
         } break;
     }
 
@@ -596,7 +739,7 @@ EzPullCanvas(ez *Ez)
 
     if(Win32)
     {
-        win32_window_rect WindowRect = Win32GetWindowRect(Win32->Window);
+        win32_window_size WindowRect = Win32GetWindowSize(Win32->Window);
         Ez->Canvas.X = WindowRect.X;
         Ez->Canvas.Y = WindowRect.Y;
     }
@@ -743,7 +886,8 @@ EzPullTime(ez *Ez)
 extern void
 EzPull(ez *Ez)
 {
-    if(Ez && Ez->Initialized)
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(Ez && Ez->Initialized && Win32)
     {
         for(int KeyIndex = 0;
             KeyIndex < EZ_MAX_KEYS;
@@ -782,7 +926,7 @@ EzPull(ez *Ez)
         // message, then the program execution will be stucked in this
         // loop.
         MSG Message;
-        while(PeekMessageA(&Message, 0, 0, 0, PM_REMOVE))
+        while(Win32->PeekMessageA(&Message, 0, 0, 0, PM_REMOVE))
         {
             switch(Message.message)
             {
@@ -807,35 +951,33 @@ EzPull(ez *Ez)
                 } break;
                 default:
                 {
-                    TranslateMessage(&Message);
-                    DispatchMessage(&Message);
+                    Win32->TranslateMessage(&Message);
+                    Win32->DispatchMessageA(&Message);
                 } break;
             }
 
-            ez_win32 *Win32 = EzGetWin32Context(Ez);
-
             // NOTE: Mouse pulling
             POINT MousePosition;
-            GetCursorPos(&MousePosition);
-            ScreenToClient(Win32->Window, &MousePosition);
+            Win32->GetCursorPos(&MousePosition);
+            Win32->ScreenToClient(Win32->Window, &MousePosition);
             Ez->Input.Mouse.X = MousePosition.x;
             Ez->Input.Mouse.Y = MousePosition.y;
             Ez->Input.Mouse.Z = 0; // TODO: Support mouse wheel
             EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_LEFT],
-                (GetKeyState(VK_LBUTTON) & (1 << 15)) > 0 ? 1 : 0);
+                (Win32->GetKeyState(VK_LBUTTON) & (1 << 15)) > 0 ? 1 : 0);
             EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_MIDDLE],
-                (GetKeyState(VK_MBUTTON) & (1 << 15)) > 0 ? 1 : 0);
+                (Win32->GetKeyState(VK_MBUTTON) & (1 << 15)) > 0 ? 1 : 0);
             EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_RIGHT],
-                (GetKeyState(VK_RBUTTON) & (1 << 15)) > 0 ? 1 : 0);
+                (Win32->GetKeyState(VK_RBUTTON) & (1 << 15)) > 0 ? 1 : 0);
             EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_X1],
-                (GetKeyState(VK_XBUTTON1) & (1 << 15)) > 0 ? 1 : 0);
+                (Win32->GetKeyState(VK_XBUTTON1) & (1 << 15)) > 0 ? 1 : 0);
             EzProcessDigitalButton(
                 &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_X2],
-                (GetKeyState(VK_XBUTTON2) & (1 << 15)) > 0 ? 1 : 0);
+                (Win32->GetKeyState(VK_XBUTTON2) & (1 << 15)) > 0 ? 1 : 0);
 
             // NOTE: Gamepad pulling
             if(Win32->XInputGetState)
@@ -921,17 +1063,17 @@ Win32DisplayBuffer(ez *Ez)
     {
         if(Ez->Canvas.Pixels)
         {
-            win32_window_rect ClientRect = Win32GetClientRect(Win32->Window);
-            HDC DeviceContext = GetDC(Win32->Window);
+            win32_window_size ClientRect = Win32GetClientSize(Win32->Window);
+            HDC DeviceContext = Win32->GetDC(Win32->Window);
 
-            StretchDIBits(
+            Win32->StretchDIBits(
                 DeviceContext,
                 0, 0, ClientRect.Width, ClientRect.Height,
                 0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
                 Ez->Canvas.Pixels, &Win32->BitmapInfo,
                 DIB_RGB_COLORS, SRCCOPY);
 
-            ReleaseDC(Win32->Window, DeviceContext);
+            Win32->ReleaseDC(Win32->Window, DeviceContext);
         }
     }
 }
@@ -948,33 +1090,33 @@ EzPush(ez *Ez)
         // Toggle fullscreen
         if(Internals->PrevFullscreen == 0 && Ez->Canvas.Fullscreen != 0)
         {
-            DWORD Style = GetWindowLong(Win32->Window, GWL_STYLE);
+            DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
             Win32->WindowPlacement.length = sizeof(Win32->WindowPlacement);
             MONITORINFO MonitorInfo = {0};
             MonitorInfo.cbSize = sizeof(MonitorInfo);
-            if(!GetWindowPlacement(Win32->Window, &Win32->WindowPlacement))
+            if(!Win32->GetWindowPlacement(Win32->Window, &Win32->WindowPlacement))
             {
                 // TODO: Log
             }
 
-            HMONITOR Monitor = MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY);
+            HMONITOR Monitor = Win32->MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY);
             if(!Monitor)
             {
                 // TODO: Log
             }
 
-            if(!GetMonitorInfo(Monitor, &MonitorInfo))
+            if(!Win32->GetMonitorInfoA(Monitor, &MonitorInfo))
             {
                 // TODO: Log
             }
 
-            if( GetWindowPlacement(Win32->Window, &Win32->WindowPlacement) &&
-                GetMonitorInfoA(MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY), &MonitorInfo))
+            if( Win32->GetWindowPlacement(Win32->Window, &Win32->WindowPlacement) &&
+                Win32->GetMonitorInfoA(Win32->MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY), &MonitorInfo))
             {
-                SetWindowLong(
+                Win32->SetWindowLongA(
                     Win32->Window, GWL_STYLE,
                     Style & ~EZ_WIN32_NORMAL_WINDOW_STYLE);
-                SetWindowPos(
+                Win32->SetWindowPos(
                     Win32->Window, HWND_TOP,
                     MonitorInfo.rcMonitor.left, MonitorInfo.rcMonitor.top,
                     MonitorInfo.rcMonitor.right - MonitorInfo.rcMonitor.left,
@@ -984,10 +1126,10 @@ EzPush(ez *Ez)
         }
         else if(Internals->PrevFullscreen != 0 && Ez->Canvas.Fullscreen == 0)
         {
-            DWORD Style = GetWindowLong(Win32->Window, GWL_STYLE);
-            SetWindowLong(Win32->Window, GWL_STYLE, Style | EZ_WIN32_NORMAL_WINDOW_STYLE);
-            SetWindowPlacement(Win32->Window, &Win32->WindowPlacement);
-            SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
+            DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
+            Win32->SetWindowLongA(Win32->Window, GWL_STYLE, Style | EZ_WIN32_NORMAL_WINDOW_STYLE);
+            Win32->SetWindowPlacement(Win32->Window, &Win32->WindowPlacement);
+            Win32->SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
         }
         Internals->PrevFullscreen = Ez->Canvas.Fullscreen;
 
@@ -1006,6 +1148,13 @@ EzInitialize(ez *Ez)
 {
     Ez->Running = 0;
     Ez->Initialized = 0;
+
+    ez_win32 *Win32 = (ez_win32 *)Ez->OSContext;
+    if(!Win32LoadUser32Dll(Win32))
+    {
+        // TODO: Log
+        return(0);
+    }
 
     char *WindowClassName = EZ_WINDOW_CLASS_NAME;
     DWORD WindowStyle = EZ_WIN32_NORMAL_WINDOW_STYLE;
@@ -1035,12 +1184,12 @@ EzInitialize(ez *Ez)
         WindowClass.cbClsExtra = 0;
         WindowClass.cbWndExtra = 0;
         WindowClass.hInstance = 0;
-        WindowClass.hIcon = LoadIcon(0, IDI_APPLICATION);
-        WindowClass.hCursor = LoadCursor(0, IDC_ARROW);
+        WindowClass.hIcon = Win32->LoadIconA(0, IDI_APPLICATION);
+        WindowClass.hCursor = Win32->LoadCursorA(0, IDC_ARROW);
         WindowClass.hbrBackground = 0;
         WindowClass.lpszMenuName = 0;
         WindowClass.lpszClassName = WindowClassName;
-        if(RegisterClassA(&WindowClass))
+        if(Win32->RegisterClassA(&WindowClass))
         {
             WindowClassIsRegistered = 1;
         }
@@ -1052,13 +1201,12 @@ EzInitialize(ez *Ez)
 
     if(WindowClassIsRegistered)
     {
-        ez_win32 *Win32 = (ez_win32 *)Ez->OSContext;
         RECT WindowRect = {0};
         WindowRect.left   = 0;
         WindowRect.top    = 0;
         WindowRect.right  = Ez->Canvas.Width + WindowRect.left;
         WindowRect.bottom = Ez->Canvas.Height + WindowRect.top;
-        if(!AdjustWindowRect(&WindowRect, WindowStyle, 0))
+        if(!Win32->AdjustWindowRect(&WindowRect, WindowStyle, 0))
         {
             // TODO: Log
             return(1);
@@ -1066,7 +1214,7 @@ EzInitialize(ez *Ez)
         int WindowWidth  = WindowRect.right - WindowRect.left;
         int WindowHeight = WindowRect.bottom - WindowRect.top;
 
-        Win32->Window = CreateWindowExA(
+        Win32->Window = Win32->CreateWindowExA(
             0,
             WindowClassName,
             Ez->Canvas.Name,
@@ -1076,11 +1224,11 @@ EzInitialize(ez *Ez)
             0, 0, 0, 0);
         if(Win32->Window)
         {
-            SetWindowLongPtr(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
+            Win32SetWindowLongPtrA(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
 
             // NOTE: If we don't do this non-sense, the GetClientRect() function keeps returning the wrong values.
-            SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE);
-            SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
+            Win32->SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE);
+            Win32->SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
 
             LARGE_INTEGER LargeInteger = {0};
             if(QueryPerformanceFrequency(&LargeInteger) && LargeInteger.QuadPart > 0)
@@ -1114,7 +1262,7 @@ EzInitialize(ez *Ez)
 
             Ez->Running = 1;
             Ez->Initialized = 1;
-            ShowWindow(Win32->Window, SW_SHOW);
+            Win32->ShowWindow(Win32->Window, SW_SHOW);
 
             Win32LoadXInputLibrary(Win32);
             for(int Index = 0;
@@ -1154,8 +1302,7 @@ EzClose(ez *Ez)
     ez_win32 *Win32 = EzGetWin32Context(Ez);
     if(Ez && Win32 && Win32->Window)
     {
-        UnregisterClassA(EZ_WINDOW_CLASS_NAME, 0);
-        DestroyWindow(Win32->Window);
+        Win32->DestroyWindow(Win32->Window);
     }
 }
 
