@@ -340,7 +340,7 @@ ez_time
 #define EZ_INTERNALS_SIZE  100
 
 #ifdef _WIN32
-#define EZ_OS_CONTEXT_SIZE 300
+#define EZ_OS_CONTEXT_SIZE 400
 #else
 #error "OS not supported"
 #endif
