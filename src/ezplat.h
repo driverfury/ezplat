@@ -456,11 +456,11 @@ typedef int (*STRETCH_DIBITS)(HDC, int, int, int, int, int, int, int, int, const
 typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD, XINPUT_STATE*);
 typedef DWORD (WINAPI *XINPUTSETSTATE)(DWORD, XINPUT_VIBRATION*);
 
-DEF_WINDOW_PROC_A Win32DefWindowProcA;
-GET_CLIENT_RECT Win32GetClientRect;
-GET_WINDOW_RECT Win32GetWindowRect;
-GET_WINDOW_LONG_PTR_A Win32GetWindowLongPtrA;
-SET_WINDOW_LONG_PTR_A Win32SetWindowLongPtrA;
+static DEF_WINDOW_PROC_A Win32DefWindowProcA;
+static GET_CLIENT_RECT Win32GetClientRect;
+static GET_WINDOW_RECT Win32GetWindowRect;
+static GET_WINDOW_LONG_PTR_A Win32GetWindowLongPtrA;
+static SET_WINDOW_LONG_PTR_A Win32SetWindowLongPtrA;
 
 typedef struct
 ez_win32
