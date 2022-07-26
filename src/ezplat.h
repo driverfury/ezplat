@@ -2,11 +2,6 @@
 #define EZPLAT_H
 
 /**
- * TODO:
- * - Remove user32.lib and gdi32.lib dependencies
- */
-
-/**
  * Definitions
  */
 
@@ -367,12 +362,13 @@ extern void     EzPush(ez *Ez);
 extern void     EzPull(ez *Ez);
 extern void     EzClose(ez *Ez);
 
+#endif
+
 #ifdef EZPLAT_IMPLEMENTATION
 
 #ifdef _WIN32
 
-// TODO: Eventually remove these: load functions diynamically (and maybe get a base
-// version of the structures defined in winbase.h?)
+// TODO: Maybe get a base version of the structures defined in winbase.h?
 #include <windows.h>
 #include <xinput.h>
 
@@ -509,7 +505,7 @@ ez_win32
 } ez_win32;
 
 #if 0
-// TODO: Do this in a static way
+// TODO: Do this in a static way instead of checking it inside EzInitialize()
 #if sizeof(ez_win32) < EZ_OS_CONTEXT_SIZE
 #error "There's not enough space for OS Context"
 #endif
@@ -530,7 +526,7 @@ EzGetWin32Context(ez *Ez)
     Win32->##FuncName = (Type)GetProcAddress(HMod, #FuncName);\
     if(!Win32->##FuncName) return(0);
 
-inline static int
+static int
 Win32LoadUser32Dll(ez_win32 *Win32)
 {
     HMODULE User32Dll = LoadLibraryA("user32.dll");
@@ -596,8 +592,7 @@ Win32LoadUser32Dll(ez_win32 *Win32)
 
 #undef WIN32_LOAD_PROC_ADDR
 
-// TODO: Maybe this don't need to be a function
-inline static void
+static int
 Win32LoadXInputLibrary(ez_win32 *Win32)
 {
     char *XInputLibs[] = {
@@ -607,7 +602,7 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
     };
     HMODULE XInput = 0;
     for(int Index = 0;
-        Index < 3; // TODO: Use ArrayCount
+        Index < (sizeof(XInputLibs)/sizeof(XInputLibs[0]));
         ++Index)
     {
         XInput = LoadLibraryA(XInputLibs[Index]);
@@ -620,11 +615,19 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
     {
         Win32->XInputGetState = (XINPUTGETSTATE)GetProcAddress(XInput, "XInputGetState");
         Win32->XInputSetState = (XINPUTSETSTATE)GetProcAddress(XInput, "XInputSetState");
+
+        if(Win32->XInputGetState && Win32->XInputSetState)
+        {
+            return(1);
+        }
     }
     else
     {
         // TODO: Log
+        return(0);
     }
+
+    return(0);
 }
 
 typedef struct
@@ -732,6 +735,8 @@ Win32WindowProc(
     return(Result);
 }
 
+#define EZ_WIN32_NORMAL_WINDOW_STYLE (WS_OVERLAPPEDWINDOW)
+
 static void
 EzPullCanvas(ez *Ez)
 {
@@ -742,12 +747,22 @@ EzPullCanvas(ez *Ez)
         win32_window_size WindowRect = Win32GetWindowSize(Win32->Window);
         Ez->Canvas.X = WindowRect.X;
         Ez->Canvas.Y = WindowRect.Y;
+
+        // Fetch fullscreen state
+        DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
+        if(Style & EZ_WIN32_NORMAL_WINDOW_STYLE)
+        {
+            Ez->Canvas.Fullscreen = 0;
+        }
+        else
+        {
+            Ez->Canvas.Fullscreen = 1;
+        }
     }
 
-    // TODO: Fetch fullscreen state
 }
 
-inline static void
+static inline void
 EzResetDigitalButton(ez_digital_button *DigitalButton)
 {
     DigitalButton->Pressed = 0;
@@ -755,7 +770,7 @@ EzResetDigitalButton(ez_digital_button *DigitalButton)
     DigitalButton->Transitions = 0;
 }
 
-inline static void
+static inline void
 EzProcessDigitalButton(
     ez_digital_button *DigitalButton,
     int IsDown)
@@ -783,7 +798,7 @@ EzProcessDigitalButton(
     }
 }
 
-inline static void
+static inline void
 EzProcessAnalogButton(
     ez_analog_button *AnalogButton,
     float Value)
@@ -796,7 +811,6 @@ EzProcessAnalogButton(
     {
         Value = 0.0f;
     }
-    // TODO: Should I clamp to zero?
     if(Value < AnalogButton->Threshold)
     {
         Value = 0.0f;
@@ -826,7 +840,7 @@ EzProcessAnalogButton(
     }
 }
 
-inline static void
+static inline void
 EzProcessGamepadStick(
     ez_gamepad_stick *Stick,
     float ValueX,
@@ -935,7 +949,6 @@ EzPull(ez *Ez)
                 case WM_SYSKEYUP:
                 case WM_SYSKEYDOWN:
                 {
-                    // TODO: We use virtual key code or scancode?
                     WPARAM KeyIndex = Message.wParam;
                     if(KeyIndex < EZ_MAX_KEYS)
                     {
@@ -1078,8 +1091,6 @@ Win32DisplayBuffer(ez *Ez)
     }
 }
 
-#define EZ_WIN32_NORMAL_WINDOW_STYLE (WS_OVERLAPPEDWINDOW)
-
 extern void
 EzPush(ez *Ez)
 {
@@ -1097,17 +1108,20 @@ EzPush(ez *Ez)
             if(!Win32->GetWindowPlacement(Win32->Window, &Win32->WindowPlacement))
             {
                 // TODO: Log
+                return;
             }
 
             HMONITOR Monitor = Win32->MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY);
             if(!Monitor)
             {
                 // TODO: Log
+                return;
             }
 
             if(!Win32->GetMonitorInfoA(Monitor, &MonitorInfo))
             {
                 // TODO: Log
+                return;
             }
 
             if( Win32->GetWindowPlacement(Win32->Window, &Win32->WindowPlacement) &&
@@ -1122,6 +1136,11 @@ EzPush(ez *Ez)
                     MonitorInfo.rcMonitor.right - MonitorInfo.rcMonitor.left,
                     MonitorInfo.rcMonitor.bottom - MonitorInfo.rcMonitor.top,
                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+            }
+            else
+            {
+                // TODO: Log
+                return;
             }
         }
         else if(Internals->PrevFullscreen != 0 && Ez->Canvas.Fullscreen == 0)
@@ -1275,8 +1294,8 @@ EzInitialize(ez *Ez)
                 Index < EZ_MAX_GAMEPADS;
                 ++Index)
             {
-                float trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
-                Ez->Input.Gamepads[Index].LeftTrigger.Threshold = trigger_threshold;
+                float TriggerThreshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
+                Ez->Input.Gamepads[Index].LeftTrigger.Threshold = TriggerThreshold;
                 float stick_threshold_x = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_X;
                 float stick_threshold_y = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_Y;
                 Ez->Input.Gamepads[Index].LeftStick.ThresholdX = stick_threshold_x;
@@ -1306,7 +1325,7 @@ extern void
 EzClose(ez *Ez)
 {
     ez_win32 *Win32 = EzGetWin32Context(Ez);
-    if(Ez && Win32 && Win32->Window)
+    if(Ez && Ez->Initialized && Win32 && Win32->Window)
     {
         Win32->DestroyWindow(Win32->Window);
     }
@@ -1319,8 +1338,6 @@ EzClose(ez *Ez)
 #undef XINPUT_STICK_MAX_X
 #undef XINPUT_STICK_MIN_Y
 #undef XINPUT_STICK_MAX_Y
-
-#endif
 
 #endif
 
