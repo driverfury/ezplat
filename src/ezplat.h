@@ -318,7 +318,7 @@ ez_input
     int               ConnectedGamepads;
 } ez_input;
 
-#include <inttypes.h>
+#include <stdint.h>
 
 typedef struct
 ez_time
@@ -360,10 +360,16 @@ ez
 extern int      EzInitialize(ez *Ez);
 extern void     EzPush(ez *Ez);
 extern void     EzPull(ez *Ez);
+extern void     EzClose(ez *Ez);
 
 #ifdef EZPLAT_IMPLEMENTATION
 
 #ifdef _WIN32
+
+// TODO: Eventually remove these: load functions diynamically (and maybe get a base
+// version of the structures defined in winbase.h?)
+#include <windows.h>
+#include <xinput.h>
 
 typedef struct
 ez_internals
@@ -381,21 +387,6 @@ EzGetInternals(ez *Ez)
 
     return((ez_internals *)Ez->Internals);
 }
-
-/**
- * TODO:
- *
- * - Keys scancode or virtual key code?
- * - Set gamepad deadzone
- * - Test gamepad input
- * - File I/O (only read entire and write entire file)
- * - BMPs support (load and draw image)
- */
-
-// TODO: Eventually remove these: load functions diynamically (and maybe get a base
-// version of the structures defined in winbase.h?)
-#include <windows.h>
-#include <xinput.h>
 
 /*
  * Debug
@@ -489,7 +480,7 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
     }
     else
     {
-        // TODO: Logging
+        // TODO: Log
     }
 }
 
@@ -548,13 +539,13 @@ Win32WindowProc(
     ez *Ez = (ez *)GetWindowLongPtr(Window, GWLP_USERDATA);
     if(!Ez)
     {
-        Result = DefWindowProcA(Window, Message, WParam, LParam);
+        return(DefWindowProcA(Window, Message, WParam, LParam));
     }
 
     ez_win32 *Win32 = EzGetWin32Context(Ez);
     if(!Win32)
     {
-        Result = DefWindowProcA(Window, Message, WParam, LParam);
+        return(DefWindowProcA(Window, Message, WParam, LParam));
     }
 
     switch(Message)
@@ -718,12 +709,22 @@ EzProcessGamepadStick(
     Stick->Y = ValueY;
 }
 
+static inline uint64_t
+Win32GetTicks(void)
+{
+    uint64_t Result = 0;
+
+    LARGE_INTEGER LargeInteger;
+    QueryPerformanceCounter(&LargeInteger);
+    Result = LargeInteger.QuadPart;
+
+    return(Result);
+}
+
 static void
 EzPullTime(ez *Ez)
 {
-    LARGE_INTEGER LargeInteger;
-    QueryPerformanceCounter(&LargeInteger);
-    uint64_t CurrentTicks = LargeInteger.QuadPart;
+    uint64_t CurrentTicks = Win32GetTicks();
 
     Ez->Time.DeltaTicks = CurrentTicks - Ez->Time.InitialTicks - Ez->Time.Ticks;
     Ez->Time.Ticks = CurrentTicks - Ez->Time.InitialTicks;
@@ -904,7 +905,7 @@ EzPull(ez *Ez)
     }
     else
     {
-        // TODO: Logging
+        // TODO: Log
     }
 }
 
@@ -925,7 +926,7 @@ Win32DisplayBuffer(ez *Ez)
 
             StretchDIBits(
                 DeviceContext,
-                0, 0, ClientRect.Width, ClientRect.Width,
+                0, 0, ClientRect.Width, ClientRect.Height,
                 0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
                 Ez->Canvas.Pixels, &Win32->BitmapInfo,
                 DIB_RGB_COLORS, SRCCOPY);
@@ -953,21 +954,18 @@ EzPush(ez *Ez)
             MonitorInfo.cbSize = sizeof(MonitorInfo);
             if(!GetWindowPlacement(Win32->Window, &Win32->WindowPlacement))
             {
-                DWORD Err = GetLastError();
-                Err = Err - 1 + 1;
+                // TODO: Log
             }
 
             HMONITOR Monitor = MonitorFromWindow(Win32->Window, MONITOR_DEFAULTTOPRIMARY);
             if(!Monitor)
             {
-                DWORD Err = GetLastError();
-                Err = Err - 1 + 1;
+                // TODO: Log
             }
 
             if(!GetMonitorInfo(Monitor, &MonitorInfo))
             {
-                DWORD Err = GetLastError();
-                Err = Err - 1 + 1;
+                // TODO: Log
             }
 
             if( GetWindowPlacement(Win32->Window, &Win32->WindowPlacement) &&
@@ -998,13 +996,18 @@ EzPush(ez *Ez)
     }
 }
 
+#define EZ_WINDOW_CLASS_NAME "ez_window_class"
+
+
+static int WindowClassIsRegistered;
+
 extern int
 EzInitialize(ez *Ez)
 {
     Ez->Running = 0;
     Ez->Initialized = 0;
 
-    char *WindowClassName = "ez_window_class";
+    char *WindowClassName = EZ_WINDOW_CLASS_NAME;
     DWORD WindowStyle = EZ_WIN32_NORMAL_WINDOW_STYLE;
 
     if(!Ez->Canvas.Name)
@@ -1014,31 +1017,42 @@ EzInitialize(ez *Ez)
 
     if(Ez->Canvas.Width <= 0 || Ez->Canvas.Height <= 0)
     {
-        // TODO: Logging
+        // TODO: Log
         return(0);
     }
 
     if(Ez->Canvas.PixelFormat != EZ_PIXEL_FORMAT_ARGB)
     {
-        // TODO: Logging
+        // TODO: Log
         return(0);
     }
 
-    WNDCLASSA WindowClass = {0};
-    WindowClass.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
-    WindowClass.lpfnWndProc = Win32WindowProc;
-    WindowClass.cbClsExtra = 0;
-    WindowClass.cbWndExtra = 0;
-    WindowClass.hInstance = 0;
-    WindowClass.hIcon = LoadIcon(0, IDI_APPLICATION);
-    WindowClass.hCursor = LoadCursor(0, IDC_ARROW);
-    WindowClass.hbrBackground = 0;
-    WindowClass.lpszMenuName = 0;
-    WindowClass.lpszClassName = WindowClassName;
-    if(RegisterClassA(&WindowClass))
+    if(!WindowClassIsRegistered)
+    {
+        WNDCLASSA WindowClass = {0};
+        WindowClass.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+        WindowClass.lpfnWndProc = Win32WindowProc;
+        WindowClass.cbClsExtra = 0;
+        WindowClass.cbWndExtra = 0;
+        WindowClass.hInstance = 0;
+        WindowClass.hIcon = LoadIcon(0, IDI_APPLICATION);
+        WindowClass.hCursor = LoadCursor(0, IDC_ARROW);
+        WindowClass.hbrBackground = 0;
+        WindowClass.lpszMenuName = 0;
+        WindowClass.lpszClassName = WindowClassName;
+        if(RegisterClassA(&WindowClass))
+        {
+            WindowClassIsRegistered = 1;
+        }
+        else
+        {
+            WindowClassIsRegistered = 0;
+        }
+    }
+
+    if(WindowClassIsRegistered)
     {
         ez_win32 *Win32 = (ez_win32 *)Ez->OSContext;
-
         RECT WindowRect = {0};
         WindowRect.left   = 0;
         WindowRect.top    = 0;
@@ -1046,7 +1060,7 @@ EzInitialize(ez *Ez)
         WindowRect.bottom = Ez->Canvas.Height + WindowRect.top;
         if(!AdjustWindowRect(&WindowRect, WindowStyle, 0))
         {
-            // TODO: Logging
+            // TODO: Log
             return(1);
         }
         int WindowWidth  = WindowRect.right - WindowRect.left;
@@ -1054,7 +1068,7 @@ EzInitialize(ez *Ez)
 
         Win32->Window = CreateWindowExA(
             0,
-            WindowClass.lpszClassName,
+            WindowClassName,
             Ez->Canvas.Name,
             WindowStyle,
             CW_USEDEFAULT, CW_USEDEFAULT,
@@ -1069,27 +1083,19 @@ EzInitialize(ez *Ez)
             SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
 
             LARGE_INTEGER LargeInteger = {0};
-            QueryPerformanceFrequency(&LargeInteger);
-            if(LargeInteger.QuadPart > 0)
+            if(QueryPerformanceFrequency(&LargeInteger) && LargeInteger.QuadPart > 0)
             {
-                Win32LoadXInputLibrary(Win32);
-                for(int Index = 0;
-                    Index < EZ_MAX_GAMEPADS;
-                    ++Index)
-                {
-                    float trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
-                    Ez->Input.Gamepads[Index].LeftTrigger.Threshold = trigger_threshold;
-                    float stick_threshold_x = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_X;
-                    float stick_threshold_y = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_Y;
-                    Ez->Input.Gamepads[Index].LeftStick.ThresholdX = stick_threshold_x;
-                    Ez->Input.Gamepads[Index].LeftStick.ThresholdY = stick_threshold_y;
-                    Ez->Input.Gamepads[Index].RightStick.ThresholdX = stick_threshold_x;
-                    Ez->Input.Gamepads[Index].RightStick.ThresholdY = stick_threshold_y;
-                }
+                Ez->Time.TicksPerSecond = (uint64_t)LargeInteger.QuadPart;
+                Ez->Time.InitialTicks = Win32GetTicks();
+                Ez->Time.CurrentTicks = Ez->Time.InitialTicks;
+                Ez->Time.Ticks = 0;
+                Ez->Time.DeltaTicks = 0;
+                Ez->Time.Delta = 0.0f;
+                Ez->Time.SinceStart = 0.0;
             }
             else
             {
-                // TODO: Logging
+                // TODO: Log
                 return(0);
             }
 
@@ -1110,21 +1116,47 @@ EzInitialize(ez *Ez)
             Ez->Initialized = 1;
             ShowWindow(Win32->Window, SW_SHOW);
 
+            Win32LoadXInputLibrary(Win32);
+            for(int Index = 0;
+                Index < EZ_MAX_GAMEPADS;
+                ++Index)
+            {
+                float trigger_threshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
+                Ez->Input.Gamepads[Index].LeftTrigger.Threshold = trigger_threshold;
+                float stick_threshold_x = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_X;
+                float stick_threshold_y = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_Y;
+                Ez->Input.Gamepads[Index].LeftStick.ThresholdX = stick_threshold_x;
+                Ez->Input.Gamepads[Index].LeftStick.ThresholdY = stick_threshold_y;
+                Ez->Input.Gamepads[Index].RightStick.ThresholdX = stick_threshold_x;
+                Ez->Input.Gamepads[Index].RightStick.ThresholdY = stick_threshold_y;
+            }
+
             EzPull(Ez);
             EzPush(Ez);
         }
         else
         {
-            // TODO: Logging
+            // TODO: Log
             return(0);
         }
     }
     else
     {
-        // TODO: Logging
+        // TODO: Log
         return(0);
     }
     return(1);
+}
+
+extern void
+EzClose(ez *Ez)
+{
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(Ez && Win32 && Win32->Window)
+    {
+        UnregisterClassA(EZ_WINDOW_CLASS_NAME, 0);
+        DestroyWindow(Win32->Window);
+    }
 }
 
 #undef EZ_WIN32_NORMAL_WINDOW_STYLE
