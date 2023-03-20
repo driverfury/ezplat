@@ -723,10 +723,6 @@ Win32WindowProc(
             Ez->Running = 0;
         } break;
 
-        case WM_SIZE:
-        {
-        } break;
-
         case WM_PAINT:
         {
             Win32DisplayBuffer(Ez);
