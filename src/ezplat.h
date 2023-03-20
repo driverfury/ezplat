@@ -529,8 +529,8 @@ EzGetWin32Context(ez *Ez)
 }
 
 #define WIN32_LOAD_PROC_ADDR(HMod, Type, FuncName)\
-    Win32->##FuncName = (Type)GetProcAddress(HMod, #FuncName);\
-    if(!Win32->##FuncName) return(0);
+    Win32->FuncName = (Type)GetProcAddress(HMod, #FuncName);\
+    if(!Win32->FuncName) return(0);
 
 static int
 Win32LoadUser32Dll(ez_win32 *Win32)
