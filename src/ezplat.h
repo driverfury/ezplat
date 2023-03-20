@@ -1261,7 +1261,7 @@ EzInitialize(ez *Ez)
         if(!Win32->AdjustWindowRect(&WindowRect, WindowStyle, 0))
         {
             // TODO: Log
-            return(1);
+            return(0);
         }
         int WindowWidth  = WindowRect.right - WindowRect.left;
         int WindowHeight = WindowRect.bottom - WindowRect.top;
