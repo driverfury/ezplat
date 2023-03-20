@@ -365,6 +365,7 @@ ez
 extern int      EzInitialize(ez *Ez);
 extern void     EzPush(ez *Ez);
 extern void     EzPull(ez *Ez);
+extern void     EzUpdate(ez *Ez);
 extern void     EzClose(ez *Ez);
 
 #endif
@@ -1180,7 +1181,6 @@ EzPush(ez *Ez)
 
 #define EZ_WINDOW_CLASS_NAME "ez_window_class"
 
-
 static int WindowClassIsRegistered;
 
 extern int
@@ -1346,6 +1346,13 @@ EzInitialize(ez *Ez)
         return(0);
     }
     return(1);
+}
+
+extern void
+EzUpdate(ez *Ez)
+{
+    EzPull(Ez);
+    EzPush(Ez);
 }
 
 extern void
