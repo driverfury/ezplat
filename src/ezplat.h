@@ -11,12 +11,8 @@
 
 #ifdef _WIN32
 
-/**
- * NOTE: I need the windows.h because I need to map ez keys to OS keys.
- */
 #include <windows.h>
 
-// TODO: Only define a stripped down version of keys?
 typedef enum
 {
                                                     // 0x00-07 Undefined
@@ -190,6 +186,7 @@ EZ_KEY_ZOOM = VK_ZOOM,	                            // 0xFB
 EZ_KEY_NONAME = VK_NONAME,	                        // 0xFC
 EZ_KEY_PA1 = VK_PA1,	                            // 0xFD
 EZ_KEY_OEM_CLEAR = VK_OEM_CLEAR,	                // 0xFE
+
 } ez_key;
 
 #else
@@ -231,16 +228,23 @@ typedef enum
 
 typedef enum
 {
+    EZ_RENDERING_SOFTWARE,
+    EZ_RENDERING_OPENGL,
+} ez_rendering_type;
+
+typedef enum
+{
     EZ_PIXEL_FORMAT_ARGB = 0,
 } ez_pixel_format;
 
 typedef struct
-ez_canvas
+ez_display
 {
     char *Name;
 
     int Active;
     int Fullscreen;
+    ez_rendering_type RenderingType;
 
     int X;
     int Y;
@@ -251,7 +255,7 @@ ez_canvas
     int Height;
     void *Pixels;
     ez_pixel_format PixelFormat;
-} ez_canvas;
+} ez_display;
 
 typedef struct
 ez_digital_button
@@ -348,11 +352,11 @@ ez_time
 typedef struct
 ez
 {
-    int       Initialized;
-    int       Running;
-    ez_canvas Canvas;
-    ez_input  Input;
-    ez_time   Time;
+    int        Initialized;
+    int        Running;
+    ez_display Display;
+    ez_input   Input;
+    ez_time    Time;
 
     unsigned char Internals[EZ_INTERNALS_SIZE];
     unsigned char OSContext[EZ_OS_CONTEXT_SIZE];
@@ -378,6 +382,7 @@ extern void     EzClose(ez *Ez);
 // TODO: Maybe get a base version of the structures defined in winbase.h?
 #include <windows.h>
 #include <xinput.h>
+#include <gl/gl.h>
 
 typedef struct
 ez_internals
@@ -457,6 +462,14 @@ typedef BOOL (*GET_MONITOR_INFO_A)(HMONITOR, LPMONITORINFO);
 
 // GDI32.DLL
 typedef int (*STRETCH_DIBITS)(HDC, int, int, int, int, int, int, int, int, const VOID*, const BITMAPINFO*, UINT, DWORD);
+typedef int (*CHOOSE_PIXEL_FORMAT)(HDC, const PIXELFORMATDESCRIPTOR *);
+typedef int (*DESCRIBE_PIXEL_FORMAT)(HDC, int, UINT, LPPIXELFORMATDESCRIPTOR);
+typedef BOOL (*SET_PIXEL_FORMAT)(HDC, int, const PIXELFORMATDESCRIPTOR *);
+typedef BOOL (*SWAP_BUFFERS)(HDC);
+
+// OPENGL32.DLL
+typedef HGLRC (*WGL_CREATE_CONTEXT)(HDC);
+typedef BOOL (*WGL_MAKE_CURRENT)(HDC, HGLRC);
 
 // Xinput
 typedef DWORD (WINAPI *XINPUTGETSTATE)(DWORD, XINPUT_STATE*);
@@ -471,7 +484,7 @@ static SET_WINDOW_LONG_PTR_A Win32SetWindowLongPtrA;
 typedef struct
 ez_win32
 {
-    // NOTE: User32.dll functions
+    // User32.dll functions
     TRANSLATE_MESSAGE TranslateMessage;
     DISPATCH_MESSAGE_A DispatchMessageA;
     PEEK_MESSAGE_A PeekMessageA;
@@ -495,19 +508,28 @@ ez_win32
     MONITOR_FROM_WINDOW MonitorFromWindow;
     GET_MONITOR_INFO_A GetMonitorInfoA;
     
-    // NOTE: Gdi32.dll functions
+    // Gdi32.dll functions
     STRETCH_DIBITS StretchDIBits;
+    CHOOSE_PIXEL_FORMAT ChoosePixelFormat;
+    DESCRIBE_PIXEL_FORMAT DescribePixelFormat;
+    SET_PIXEL_FORMAT SetPixelFormat;
+    SWAP_BUFFERS SwapBuffers;
 
-    // NOTE: Window
+    // OpenGL32.dll functions
+    WGL_CREATE_CONTEXT wglCreateContext;
+    WGL_MAKE_CURRENT wglMakeCurrent;
+
+    // Window
     HWND Window;
     WINDOWPLACEMENT WindowPlacement;
 
-    // NOTE: XInput
+    // XInput
     XINPUTGETSTATE XInputGetState;
     XINPUTSETSTATE XInputSetState;
 
-    // NOTE: Gfx
+    // Gfx
     BITMAPINFO BitmapInfo;
+    HGLRC GLRenderContext;
 } ez_win32;
 
 #if 0
@@ -533,8 +555,19 @@ EzGetWin32Context(ez *Ez)
     if(!Win32->FuncName) return(0);
 
 static int
-Win32LoadUser32Dll(ez_win32 *Win32)
+Win32LoadUser32Dll(ez *Ez)
 {
+    if(!Ez)
+    {
+        return(0);
+    }
+
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(!Win32)
+    {
+        return(0);
+    }
+
     HMODULE User32Dll = LoadLibraryA("user32.dll");
     if(!User32Dll)
     {
@@ -593,6 +626,28 @@ Win32LoadUser32Dll(ez_win32 *Win32)
 
     WIN32_LOAD_PROC_ADDR(Gdi32Dll, STRETCH_DIBITS, StretchDIBits);
 
+    if(Ez->Display.RenderingType == EZ_RENDERING_OPENGL)
+    {
+        HMODULE OpenGL32Dll = LoadLibraryA("opengl32.dll");
+        if(!OpenGL32Dll)
+        {
+            OpenGL32Dll = LoadLibraryA("OPENGL32.DLL");
+        }
+
+        if(!OpenGL32Dll)
+        {
+            return(0);
+        }
+
+        WIN32_LOAD_PROC_ADDR(Gdi32Dll, CHOOSE_PIXEL_FORMAT, ChoosePixelFormat);
+        WIN32_LOAD_PROC_ADDR(Gdi32Dll, DESCRIBE_PIXEL_FORMAT, DescribePixelFormat);
+        WIN32_LOAD_PROC_ADDR(Gdi32Dll, SET_PIXEL_FORMAT, SetPixelFormat);
+        WIN32_LOAD_PROC_ADDR(Gdi32Dll, SWAP_BUFFERS, SwapBuffers);
+
+        WIN32_LOAD_PROC_ADDR(OpenGL32Dll, WGL_CREATE_CONTEXT, wglCreateContext);
+        WIN32_LOAD_PROC_ADDR(OpenGL32Dll, WGL_MAKE_CURRENT, wglMakeCurrent);
+    }
+
     return(1);
 }
 
@@ -634,6 +689,70 @@ Win32LoadXInputLibrary(ez_win32 *Win32)
     }
 
     return(0);
+}
+
+static int
+Win32InitOpenGL(ez *Ez)
+{
+    if(!Ez)
+    {
+        return(0);
+    }
+
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(!Win32)
+    {
+        return(0);
+    }
+
+    HDC WindowDC = Win32->GetDC(Win32->Window);
+    if(!WindowDC)
+    {
+        return(0);
+    }
+
+    PIXELFORMATDESCRIPTOR PixelFormatDesc = {0};
+    PixelFormatDesc.nSize = sizeof(PixelFormatDesc);
+    PixelFormatDesc.nVersion = 1;
+    PixelFormatDesc.dwFlags = PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
+    PixelFormatDesc.cColorBits = 32;
+    PixelFormatDesc.cAlphaBits = 8;
+    PixelFormatDesc.iLayerType = PFD_MAIN_PLANE;
+    PixelFormatDesc.iPixelType = PFD_TYPE_RGBA;
+
+    int SuggestedPixelFormat = Win32->ChoosePixelFormat(WindowDC, &PixelFormatDesc);
+    if(!SuggestedPixelFormat)
+    {
+        return(0);
+    }
+
+    PIXELFORMATDESCRIPTOR SuggestedPixelFormatDesc = {0};
+    if(!Win32->DescribePixelFormat(WindowDC, SuggestedPixelFormat, sizeof(SuggestedPixelFormatDesc), &SuggestedPixelFormatDesc))
+    {
+        return(0);
+    }
+
+    if(!Win32->SetPixelFormat(WindowDC, SuggestedPixelFormat, &SuggestedPixelFormatDesc))
+    {
+        return(0);
+    }
+
+    HGLRC GLRenderContext = Win32->wglCreateContext(WindowDC);
+    if(!GLRenderContext)
+    {
+        return(0);
+    }
+
+    if(!Win32->wglMakeCurrent(WindowDC, GLRenderContext))
+    {
+        return(0);
+    }
+
+    Win32->GLRenderContext = GLRenderContext;
+
+    Win32->ReleaseDC(Win32->Window, WindowDC);
+
+    return(1);
 }
 
 typedef struct
@@ -708,11 +827,11 @@ Win32WindowProc(
         {
             if(WParam)
             {
-                Ez->Canvas.Active = 1;
+                Ez->Display.Active = 1;
             }
             else
             {
-                Ez->Canvas.Active = 0;
+                Ez->Display.Active = 0;
             }
         } break;
 #endif
@@ -740,7 +859,7 @@ Win32WindowProc(
 #define EZ_WIN32_NORMAL_WINDOW_STYLE (WS_OVERLAPPEDWINDOW)
 
 static void
-EzPullCanvas(ez *Ez)
+EzPullWindow(ez *Ez)
 {
     if(Ez && Ez->Initialized)
     {
@@ -749,22 +868,22 @@ EzPullCanvas(ez *Ez)
         if(Win32)
         {
             win32_window_size WindowRect = Win32GetWindowSize(Win32->Window);
-            Ez->Canvas.X = WindowRect.X;
-            Ez->Canvas.Y = WindowRect.Y;
+            Ez->Display.X = WindowRect.X;
+            Ez->Display.Y = WindowRect.Y;
 
             win32_window_size ClientRect = Win32GetClientSize(Win32->Window);
-            Ez->Canvas.ClientWidth = ClientRect.Width;
-            Ez->Canvas.ClientHeight = ClientRect.Height;
+            Ez->Display.ClientWidth = ClientRect.Width;
+            Ez->Display.ClientHeight = ClientRect.Height;
 
             // Fetch fullscreen state
             DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
             if(Style & EZ_WIN32_NORMAL_WINDOW_STYLE)
             {
-                Ez->Canvas.Fullscreen = 0;
+                Ez->Display.Fullscreen = 0;
             }
             else
             {
-                Ez->Canvas.Fullscreen = 1;
+                Ez->Display.Fullscreen = 1;
             }
         }
     }
@@ -947,7 +1066,7 @@ EzPull(ez *Ez)
                 EzResetDigitalButton(&Gamepad->Back);
             }
 
-            // NOTE: Keyboard pulling
+            // Keyboard pulling
             // TODO: Execute this as a fiber object because when the user
             // is resizing or moving the window the OS will keep spawning
             // message, then the program execution will be stucked in this
@@ -982,7 +1101,7 @@ EzPull(ez *Ez)
                     } break;
                 }
 
-                // NOTE: Mouse pulling
+                // Mouse pulling
                 POINT MousePosition;
                 Win32->GetCursorPos(&MousePosition);
                 Win32->ScreenToClient(Win32->Window, &MousePosition);
@@ -1005,7 +1124,7 @@ EzPull(ez *Ez)
                     &Ez->Input.Mouse.Buttons[EZ_MOUSE_BTN_X2],
                     (Win32->GetKeyState(VK_XBUTTON2) & (1 << 15)) > 0 ? 1 : 0);
 
-                // NOTE: Gamepad pulling
+                // Gamepad pulling
                 if(Win32->XInputGetState)
                 {
                     int ConnectedGamepads = 0;
@@ -1068,7 +1187,7 @@ EzPull(ez *Ez)
                 }
                 Ez->Input.Gamepad = Ez->Input.Gamepads[0];
             }
-            EzPullCanvas(Ez);
+            EzPullWindow(Ez);
             EzPullTime(Ez);
         }
         else
@@ -1086,9 +1205,20 @@ static void
 Win32DisplayBuffer(ez *Ez)
 {
     ez_win32 *Win32 = EzGetWin32Context(Ez);
-    if(Ez && Win32)
+    if(!Ez || !Win32)
     {
-        if(Ez->Canvas.Pixels)
+        return;
+    }
+
+    if(Ez->Display.RenderingType == EZ_RENDERING_OPENGL)
+    {
+        HDC WindowDC = Win32->GetDC(Win32->Window);
+        Win32->SwapBuffers(WindowDC);
+        Win32->ReleaseDC(Win32->Window, WindowDC);
+    }
+    else if(Ez->Display.RenderingType == EZ_RENDERING_SOFTWARE)
+    {
+        if(Ez->Display.Pixels)
         {
             win32_window_size ClientRect = Win32GetClientSize(Win32->Window);
             HDC DeviceContext = Win32->GetDC(Win32->Window);
@@ -1096,8 +1226,8 @@ Win32DisplayBuffer(ez *Ez)
             Win32->StretchDIBits(
                 DeviceContext,
                 0, 0, ClientRect.Width, ClientRect.Height,
-                0, 0, Ez->Canvas.Width, Ez->Canvas.Height,
-                Ez->Canvas.Pixels, &Win32->BitmapInfo,
+                0, 0, Ez->Display.Width, Ez->Display.Height,
+                Ez->Display.Pixels, &Win32->BitmapInfo,
                 DIB_RGB_COLORS, SRCCOPY);
 
             Win32->ReleaseDC(Win32->Window, DeviceContext);
@@ -1115,7 +1245,7 @@ EzPush(ez *Ez)
         if(Internals && Win32)
         {
             // Toggle fullscreen
-            if(Internals->PrevFullscreen == 0 && Ez->Canvas.Fullscreen != 0)
+            if(Internals->PrevFullscreen == 0 && Ez->Display.Fullscreen != 0)
             {
                 DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
                 Win32->WindowPlacement.length = sizeof(Win32->WindowPlacement);
@@ -1159,14 +1289,14 @@ EzPush(ez *Ez)
                     return;
                 }
             }
-            else if(Internals->PrevFullscreen != 0 && Ez->Canvas.Fullscreen == 0)
+            else if(Internals->PrevFullscreen != 0 && Ez->Display.Fullscreen == 0)
             {
                 DWORD Style = Win32->GetWindowLongA(Win32->Window, GWL_STYLE);
                 Win32->SetWindowLongA(Win32->Window, GWL_STYLE, Style | EZ_WIN32_NORMAL_WINDOW_STYLE);
                 Win32->SetWindowPlacement(Win32->Window, &Win32->WindowPlacement);
                 Win32->SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
             }
-            Internals->PrevFullscreen = Ez->Canvas.Fullscreen;
+            Internals->PrevFullscreen = Ez->Display.Fullscreen;
 
             // Display canvas buffer
             Win32DisplayBuffer(Ez);
@@ -1183,6 +1313,7 @@ EzInitialize(ez *Ez)
 {
     if(!Ez)
     {
+        // TODO: Log
         return(0);
     }
 
@@ -1197,8 +1328,8 @@ EzInitialize(ez *Ez)
     Ez->Running = 0;
     Ez->Initialized = 0;
 
-    ez_win32 *Win32 = (ez_win32 *)Ez->OSContext;
-    if(!Win32LoadUser32Dll(Win32))
+    ez_win32 *Win32 = EzGetWin32Context(Ez);
+    if(!Win32LoadUser32Dll(Ez))
     {
         // TODO: Log
         return(0);
@@ -1207,18 +1338,18 @@ EzInitialize(ez *Ez)
     char *WindowClassName = EZ_WINDOW_CLASS_NAME;
     DWORD WindowStyle = EZ_WIN32_NORMAL_WINDOW_STYLE;
 
-    if(!Ez->Canvas.Name)
+    if(!Ez->Display.Name)
     {
-        Ez->Canvas.Name = "ez";
+        Ez->Display.Name = "ez";
     }
 
-    if(Ez->Canvas.Width <= 0 || Ez->Canvas.Height <= 0)
+    if(Ez->Display.Width <= 0 || Ez->Display.Height <= 0)
     {
         // TODO: Log
         return(0);
     }
 
-    if(Ez->Canvas.PixelFormat != EZ_PIXEL_FORMAT_ARGB)
+    if(Ez->Display.PixelFormat != EZ_PIXEL_FORMAT_ARGB)
     {
         // TODO: Log
         return(0);
@@ -1247,100 +1378,103 @@ EzInitialize(ez *Ez)
         }
     }
 
-    if(WindowClassIsRegistered)
+    if(!WindowClassIsRegistered)
     {
-        RECT WindowRect = {0};
-        WindowRect.left   = 0;
-        WindowRect.top    = 0;
-        WindowRect.right  = Ez->Canvas.Width + WindowRect.left;
-        WindowRect.bottom = Ez->Canvas.Height + WindowRect.top;
-        if(!Win32->AdjustWindowRect(&WindowRect, WindowStyle, 0))
-        {
-            // TODO: Log
-            return(0);
-        }
-        int WindowWidth  = WindowRect.right - WindowRect.left;
-        int WindowHeight = WindowRect.bottom - WindowRect.top;
+        // TODO: Log
+        return(0);
+    }
 
-        Win32->Window = Win32->CreateWindowExA(
-            0,
-            WindowClassName,
-            Ez->Canvas.Name,
-            WindowStyle,
-            CW_USEDEFAULT, CW_USEDEFAULT,
-            WindowWidth, WindowHeight,
-            0, 0, 0, 0);
-        if(Win32->Window)
-        {
-            Win32SetWindowLongPtrA(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
+    RECT WindowRect = {0};
+    WindowRect.left   = 0;
+    WindowRect.top    = 0;
+    WindowRect.right  = Ez->Display.Width + WindowRect.left;
+    WindowRect.bottom = Ez->Display.Height + WindowRect.top;
+    if(!Win32->AdjustWindowRect(&WindowRect, WindowStyle, 0))
+    {
+        // TODO: Log
+        return(0);
+    }
+    int WindowWidth  = WindowRect.right - WindowRect.left;
+    int WindowHeight = WindowRect.bottom - WindowRect.top;
 
-            // NOTE: If we don't do this non-sense, the GetClientRect() function keeps returning the wrong values.
-            Win32->SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE);
-            Win32->SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
+    Win32->Window = Win32->CreateWindowExA(
+        0,
+        WindowClassName,
+        Ez->Display.Name,
+        WindowStyle,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        WindowWidth, WindowHeight,
+        0, 0, 0, 0);
+    if(!Win32->Window)
+    {
+        // TODO: Log
+        return(0);
+    }
 
-            LARGE_INTEGER LargeInteger = {0};
-            if(QueryPerformanceFrequency(&LargeInteger) && LargeInteger.QuadPart > 0)
-            {
-                Ez->Time.TicksPerSecond = (uint64_t)LargeInteger.QuadPart;
-                Ez->Time.InitialTicks = Win32GetTicks();
-                Ez->Time.CurrentTicks = Ez->Time.InitialTicks;
-                Ez->Time.Ticks = 0;
-                Ez->Time.DeltaTicks = 0;
-                Ez->Time.Delta = 0.0f;
-                Ez->Time.SinceStart = 0.0;
-            }
-            else
-            {
-                // TODO: Log
-                return(0);
-            }
+    Win32SetWindowLongPtrA(Win32->Window, GWLP_USERDATA, (LONG_PTR)Ez);
 
-            Win32->BitmapInfo.bmiHeader.biSize = sizeof(Win32->BitmapInfo.bmiHeader);
-            Win32->BitmapInfo.bmiHeader.biWidth = Ez->Canvas.Width;
-            Win32->BitmapInfo.bmiHeader.biHeight = -Ez->Canvas.Height;
-            Win32->BitmapInfo.bmiHeader.biPlanes = 1;
-            Win32->BitmapInfo.bmiHeader.biBitCount = 32;
-            Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
+    // NOTE: If we don't do this non-sense, the GetClientRect() function keeps returning the wrong values.
+    Win32->SetWindowPos(Win32->Window, 0, 0, 0, 0, 0, SWP_NOMOVE);
+    Win32->SetWindowPos(Win32->Window, 0, 0, 0, WindowWidth, WindowHeight, SWP_NOMOVE);
 
-            ez_internals *Internals = EzGetInternals(Ez);
-            if(Internals)
-            {
-                Internals->PrevFullscreen = 0;
-            }
-
-            Ez->Running = 1;
-            Ez->Initialized = 1;
-            Win32->ShowWindow(Win32->Window, SW_SHOW);
-
-            Win32LoadXInputLibrary(Win32);
-            for(int Index = 0;
-                Index < EZ_MAX_GAMEPADS;
-                ++Index)
-            {
-                float TriggerThreshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
-                Ez->Input.Gamepads[Index].LeftTrigger.Threshold = TriggerThreshold;
-                float stick_threshold_x = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_X;
-                float stick_threshold_y = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_Y;
-                Ez->Input.Gamepads[Index].LeftStick.ThresholdX = stick_threshold_x;
-                Ez->Input.Gamepads[Index].LeftStick.ThresholdY = stick_threshold_y;
-                Ez->Input.Gamepads[Index].RightStick.ThresholdX = stick_threshold_x;
-                Ez->Input.Gamepads[Index].RightStick.ThresholdY = stick_threshold_y;
-            }
-
-            EzPull(Ez);
-            EzPush(Ez);
-        }
-        else
-        {
-            // TODO: Log
-            return(0);
-        }
+    LARGE_INTEGER LargeInteger = {0};
+    if(QueryPerformanceFrequency(&LargeInteger) && LargeInteger.QuadPart > 0)
+    {
+        Ez->Time.TicksPerSecond = (uint64_t)LargeInteger.QuadPart;
+        Ez->Time.InitialTicks = Win32GetTicks();
+        Ez->Time.CurrentTicks = Ez->Time.InitialTicks;
+        Ez->Time.Ticks = 0;
+        Ez->Time.DeltaTicks = 0;
+        Ez->Time.Delta = 0.0f;
+        Ez->Time.SinceStart = 0.0;
     }
     else
     {
         // TODO: Log
         return(0);
     }
+
+    Win32->BitmapInfo.bmiHeader.biSize = sizeof(Win32->BitmapInfo.bmiHeader);
+    Win32->BitmapInfo.bmiHeader.biWidth = Ez->Display.Width;
+    Win32->BitmapInfo.bmiHeader.biHeight = -Ez->Display.Height;
+    Win32->BitmapInfo.bmiHeader.biPlanes = 1;
+    Win32->BitmapInfo.bmiHeader.biBitCount = 32;
+    Win32->BitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    ez_internals *Internals = EzGetInternals(Ez);
+    if(Internals)
+    {
+        Internals->PrevFullscreen = 0;
+    }
+
+    if(Ez->Display.RenderingType == EZ_RENDERING_OPENGL && !Win32InitOpenGL(Ez))
+    {
+        // TODO: Log
+        return(0);
+    }
+
+    Ez->Running = 1;
+    Ez->Initialized = 1;
+    Win32->ShowWindow(Win32->Window, SW_SHOW);
+
+    Win32LoadXInputLibrary(Win32);
+    for(int Index = 0;
+        Index < EZ_MAX_GAMEPADS;
+        ++Index)
+    {
+        float TriggerThreshold = XINPUT_GAMEPAD_TRIGGER_THRESHOLD / XINPUT_TRIGGER_MAX_VALUE;
+        Ez->Input.Gamepads[Index].LeftTrigger.Threshold = TriggerThreshold;
+        float stick_threshold_x = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_X;
+        float stick_threshold_y = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE / XINPUT_STICK_MAX_Y;
+        Ez->Input.Gamepads[Index].LeftStick.ThresholdX = stick_threshold_x;
+        Ez->Input.Gamepads[Index].LeftStick.ThresholdY = stick_threshold_y;
+        Ez->Input.Gamepads[Index].RightStick.ThresholdX = stick_threshold_x;
+        Ez->Input.Gamepads[Index].RightStick.ThresholdY = stick_threshold_y;
+    }
+
+    EzPull(Ez);
+    EzPush(Ez);
+
     return(1);
 }
 
