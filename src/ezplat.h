@@ -425,7 +425,6 @@ Printf(char *format, ...)
 #define XINPUT_STICK_MIN_Y       -32768
 #define XINPUT_STICK_MAX_Y        32767
 
-
 // USER32.DLL
 typedef BOOL (*TRANSLATE_MESSAGE)(const MSG *);
 typedef BOOL (*DISPATCH_MESSAGE_A)(const MSG *);
@@ -1191,8 +1190,9 @@ EzInitialize(ez *Ez)
         return(0);
     }
 
-    int EnoughContextSpace = EZ_OS_CONTEXT_SIZE >= sizeof(ez_win32);
-    if(!EnoughContextSpace)
+    int EnoughContextSpace = (EZ_OS_CONTEXT_SIZE >= sizeof(ez_win32));
+    int EnoughInternalsSpace = (EZ_INTERNALS_SIZE >= sizeof(ez_internals));
+    if(!EnoughContextSpace || !EnoughInternalsSpace)
     {
         // TODO: Log
         return(0);
@@ -1368,6 +1368,10 @@ EzClose(ez *Ez)
     }
 }
 
+#undef EZ_WINDOW_CLASS_NAME
+
+#undef EZ_INTERNALS_SIZE
+#undef EZ_OS_CONTEXT_SIZE
 #undef EZ_WIN32_NORMAL_WINDOW_STYLE
 
 #undef XINPUT_TRIGGER_MAX_VALUE
