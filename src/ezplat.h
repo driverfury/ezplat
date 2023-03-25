@@ -382,7 +382,6 @@ extern void     EzClose(ez *Ez);
 // TODO: Maybe get a base version of the structures defined in winbase.h?
 #include <windows.h>
 #include <xinput.h>
-#include <gl/gl.h>
 
 typedef struct
 ez_internals
