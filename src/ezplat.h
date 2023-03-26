@@ -376,6 +376,7 @@ extern void     EzClose(ez *Ez);
 
 #ifdef EZPLAT_IMPLEMENTATION
 #ifndef EZPLAT_IMPLEMENTED
+#define EZPLAT_IMPLEMENTED
 
 #ifdef _WIN32
 
